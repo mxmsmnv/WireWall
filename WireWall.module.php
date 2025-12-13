@@ -13,7 +13,7 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.0.8.1
+ * @version 1.0.8
  * @author Maxim Alex
  * @date December 12, 2025
  * @requires ProcessWire 3.0.200+, PHP 8.1+

@@ -1,6 +1,6 @@
 # WireWall - ProcessWire Security & Firewall Module
 
-**Version 1.0.8.1** | **Author:** Maxim Alex | **GitHub:** [mxmsmnv](https://github.com/mxmsmnv)
+**Version 1.0.8** | **Author:** Maxim Alex | **GitHub:** [mxmsmnv](https://github.com/mxmsmnv)
 
 Advanced security and firewall module for ProcessWire CMS with comprehensive geo-blocking, rate limiting, VPN/Proxy detection, and city-level access control with subdivision/region blocking.
 
@@ -103,21 +103,21 @@ See [CONFIGURATIONS.md](CONFIGURATIONS.md) for more examples.
 
 With City Database:
 ```
-BLOCKED | US (Wilmington, Delaware) | 73.141.210.93 | AS7922 Comcast | subdivision-blocked
+BLOCKED | US (Chicago, Illinois) | 174.198.11.141 |  AS6167 CELLCO-PART | subdivision-blocked
 ALLOWED | US (Philadelphia, Pennsylvania) | 1.2.3.4 | AS7922 Comcast
 BLOCKED | AU (Sydney, New South Wales) | 1.1.1.1 | AS13335 Cloudflare | city-blocked
 ```
 
 Without City Database:
 ```
-BLOCKED | RU | 185.220.101.1 | AS13335 Cloudflare | country-blocked
+BLOCKED | DE | 185.220.101.1 | AS13335 Cloudflare | country-blocked
 ALLOWED | AU | 1.1.1.1 | AS13335 Cloudflare
 ```
 
 Debug Log (wirewall-debug.txt):
 ```
-getCityData(73.141.210.93): city=Wilmington, region=Delaware, country=US
-Subdivision check: Delaware, US | Mode: blacklist | Matched: Delaware | Will block: YES
+getCityData(174.198.11.141): city= Chicago, region= Illinois, country=US
+Subdivision check: Illinois, US | Mode: blacklist | Matched: Illinois | Will block: YES
 ```
 
 ---

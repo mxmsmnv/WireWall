@@ -334,14 +334,6 @@ After installation:
 
 ---
 
-## 📞 Need Help?
-
-- **GitHub Issues:** https://github.com/mxmsmnv/WireWall/issues
-- **Documentation:** https://github.com/mxmsmnv/WireWall/wiki
-- **ProcessWire Forums:** https://processwire.com/talk/
-
----
-
 **Installation complete! 🎉**
 
 Proceed to [CONFIGURATIONS.md](CONFIGURATIONS.md) for configuration examples.
