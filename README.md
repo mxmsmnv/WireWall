@@ -1,6 +1,6 @@
 # WireWall - ProcessWire Security & Firewall Module
 
-**Version 1.0.8** | **Author:** Maxim Alex | **GitHub:** [mxmsmnv](https://github.com/mxmsmnv)
+**Version 1.0.9** | **Author:** Maxim Alex | **GitHub:** [mxmsmnv](https://github.com/mxmsmnv)
 
 Advanced security and firewall module for ProcessWire CMS with comprehensive geo-blocking, rate limiting, VPN/Proxy detection, and city-level access control with subdivision/region blocking.
 
@@ -246,6 +246,14 @@ Contributions welcome! Please:
 - **MaxMind** - GeoLite2 databases
 - **ProcessWire** - Amazing CMS platform
 - **Community** - Testing and feedback
+
+---
+
+## 📞 Support
+
+- **Issues:** [GitHub Issues](https://github.com/mxmsmnv/WireWall/issues)
+- **Documentation:** [Wiki](https://github.com/mxmsmnv/WireWall/wiki)
+- **Author:** Maxim Alex [@mxmsmnv](https://github.com/mxmsmnv)
 
 ---
 

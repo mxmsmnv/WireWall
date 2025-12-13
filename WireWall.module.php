@@ -13,7 +13,7 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.0.8
+ * @version 1.0.9
  * @author Maxim Alex
  * @date December 12, 2025
  * @requires ProcessWire 3.0.200+, PHP 8.1+
@@ -25,7 +25,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 108,
+            'version' => 109,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -40,6 +40,9 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     // Current request data
     protected $currentAS = null;
     protected $currentCountry = null;
+    
+    // Allow AJAX from trusted ProcessWire modules (default: enabled)
+    protected $allowTrustedModules = true;
     
     // MaxMind GeoIP readers
     protected $geoipReader = null;
@@ -210,6 +213,12 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         
         // Skip for CLI
         if ($config->cli) return;
+        
+        // === PRIORITY 0.5: ALLOW TRUSTED PROCESSWIRE MODULE AJAX REQUESTS ===
+        // Check before any other security checks
+        if ($this->allowTrustedModules && $this->isAllowedModuleRequest()) {
+            return; // Allow trusted module AJAX - no logging, no blocking
+        }
         
         $ip = $this->getRealClientIP();
         $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
@@ -1082,6 +1091,57 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             'cohere-ai', 'perplexitybot', 'you-ai',
             'bytespider', 'meta-externalagent'
         ];
+    }
+
+    /**
+     * Check if request is from a trusted ProcessWire module (AJAX)
+     * Returns true if this is an allowed module request that should bypass WireWall
+     */
+    protected function isAllowedModuleRequest() {
+        $input = $this->wire('input');
+        
+        // Only check POST AJAX requests
+        if (!$input->requestMethod('POST')) {
+            return false;
+        }
+        
+        // Check for AJAX header
+        $isAjax = isset($_SERVER['HTTP_X_REQUESTED_WITH']) 
+            && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest';
+        
+        if (!$isAjax) {
+            return false;
+        }
+        
+        // List of trusted ProcessWire module patterns
+        $trustedPatterns = [
+            'bookmarks',       // FieldtypeBookmarks
+            'ProcessWire',     // Core ProcessWire modules
+            'InputfieldPage',  // Page autocomplete
+            'Inputfield',      // Other inputfields
+            'process',         // Process modules
+            'field',           // Field-related requests
+            'page',            // Page-related AJAX
+        ];
+        
+        // Check POST parameters for trusted patterns
+        foreach ($input->post as $key => $value) {
+            foreach ($trustedPatterns as $pattern) {
+                // Case-insensitive check if key starts with pattern
+                if (stripos($key, $pattern) === 0) {
+                    return true;
+                }
+            }
+        }
+        
+        // Check if request URL contains /processwire/ or /admin/
+        $requestUri = $_SERVER['REQUEST_URI'] ?? '';
+        if (stripos($requestUri, '/processwire/') !== false || 
+            stripos($requestUri, '/admin/') !== false) {
+            return true;
+        }
+        
+        return false;
     }
 
     /**
@@ -1965,6 +2025,16 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f->label = 'Enable WireWall';
         $f->description = 'Turn on the firewall protection';
         $f->checked = isset($data['enabled']) && $data['enabled'] ? 'checked' : '';
+        $inputfields->add($f);
+        
+        // === ALLOW TRUSTED MODULES ===
+        $f = $modules->get('InputfieldCheckbox');
+        $f->name = 'allowTrustedModules';
+        $f->label = 'Allow AJAX from trusted modules';
+        $f->description = 'Allow AJAX requests from known ProcessWire modules (InputfieldPage, etc.)';
+        $f->notes = 'Recommended: Keep this enabled to allow ProcessWire modules to function properly. Disabling this may break AJAX functionality in your modules.';
+        $f->icon = 'check-circle';
+        $f->checked = (!isset($data['allowTrustedModules']) || $data['allowTrustedModules']) ? 'checked' : '';
         $inputfields->add($f);
         
         // === CACHE MANAGEMENT ===
