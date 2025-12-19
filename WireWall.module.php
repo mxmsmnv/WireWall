@@ -1,7 +1,7 @@
 <?php namespace ProcessWire;
 
 /**
- * WireWall 1.0 - Advanced Traffic Firewall
+ * WireWall 1.1.9 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -13,9 +13,9 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.0.9
+ * @version 1.1.9
  * @author Maxim Alex
- * @date December 12, 2025
+ * @date December 19, 2025
  * @requires ProcessWire 3.0.200+, PHP 8.1+
  */
 
@@ -25,7 +25,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 109,
+            'version' => 119,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -43,6 +43,11 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     
     // Allow AJAX from trusted ProcessWire modules (default: enabled)
     protected $allowTrustedModules = true;
+    
+    // Allowed User-Agents and IPs (whitelist/exceptions)
+    protected $allowedUserAgents = '';
+    protected $allowedIPs = '';
+    protected $allowedASNs = '';
     
     // MaxMind GeoIP readers
     protected $geoipReader = null;
@@ -106,11 +111,26 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      * Initialize module - early hook for maximum performance
      */
     public function init() {
+        // Load module settings explicitly (fixes ProcessWire not loading new fields)
+        $data = $this->wire('modules')->getModuleConfigData($this);
+        if (isset($data['allowedASNs'])) {
+            $this->allowedASNs = $data['allowedASNs'];
+        }
+        if (isset($data['allowedUserAgents'])) {
+            $this->allowedUserAgents = $data['allowedUserAgents'];
+        }
+        if (isset($data['allowedIPs'])) {
+            $this->allowedIPs = $data['allowedIPs'];
+        }
+        if (isset($data['allowTrustedModules'])) {
+            $this->allowTrustedModules = $data['allowTrustedModules'];
+        }
+        
         // Create cache directory if it doesn't exist
         $cachePath = $this->wire('config')->paths->cache . 'WireWall/';
         if (!is_dir($cachePath)) {
             if (!@mkdir($cachePath, 0755, true)) {
-                $this->log("Failed to create cache directory: {$cachePath}");
+                $this->wire('log')->save('wirewall', "Failed to create cache directory: {$cachePath}");
             }
         }
         
@@ -227,19 +247,33 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         
         // === PRIORITY 1: IP WHITELIST (ALWAYS ALLOW) ===
         if ($this->isIPWhitelisted($ip)) {
-            $this->logAccess($ip, null, null, true, '');
+            $this->logAccess($ip, null, null, true, '', $userAgent);
+            return;
+        }
+        
+        // Get GeoIP data early (country + ASN) for whitelist checks
+        $geoData = $this->getGeoData($ip);
+        $country = $geoData['country'] ?? null;
+        $asn = $geoData['asn'] ?? null;
+        $this->currentAS = $asn;
+        $this->currentCountry = $country;
+        
+        // === PRIORITY 1.5: ALLOWED BOTS/IPs/ASNs (EXCEPTIONS) ===
+        // Allow legitimate bots (Google, Bing, Yandex, etc.)
+        if ($this->isAllowedBot($userAgent, $ip, $asn)) {
+            $this->logAccess($ip, $country, $asn, true, 'allowed-bot', $userAgent);
             return;
         }
         
         // === PRIORITY 2: RATE LIMITING ===
         if ($this->rate_limit_enabled && $this->isRateLimited($ip)) {
-            $this->blockAccess('rate-limit', $ip, null, null);
+            $this->blockAccess('rate-limit', $ip, null, null, $userAgent);
             return;
         }
         
         // === PRIORITY 3: IP BLACKLIST (ALWAYS BLOCK) ===
         if ($this->isIPBlacklisted($ip)) {
-            $this->blockAccess('ip', $ip, null, null);
+            $this->blockAccess('ip', $ip, null, null, $userAgent);
             return;
         }
         
@@ -247,45 +281,38 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         if ($this->js_challenge_enabled) {
             // Check if suspicious AND no valid cookie
             if ($this->isSuspiciousRequest($userAgent) && !$this->verifyChallengeCookie()) {
-                $this->showJSChallenge($ip);
+                $this->showJSChallenge($ip, $userAgent);
                 return;
             }
         }
         
-        // Get GeoIP data (country + ASN)
-        $geoData = $this->getGeoData($ip);
-        $country = $geoData['country'] ?? null;
-        $asn = $geoData['asn'] ?? null;
-        $this->currentAS = $asn;
-        $this->currentCountry = $country;
-        
         // === PRIORITY 5: VPN/PROXY/TOR DETECTION ===
         if ($this->block_proxy_vpn_tor && $this->isProxyVPNTor($ip)) {
-            $this->blockAccess('proxy-vpn-tor', $ip, $country, $asn);
+            $this->blockAccess('proxy-vpn-tor', $ip, $country, $asn, $userAgent);
             return;
         }
         
         // === PRIORITY 6: DATACENTER DETECTION ===
         if ($this->block_datacenters && $this->isDatacenter($ip, $asn)) {
-            $this->blockAccess('datacenter', $ip, $country, $asn);
+            $this->blockAccess('datacenter', $ip, $country, $asn, $userAgent);
             return;
         }
         
         // === PRIORITY 7: ASN BLOCKING ===
         if ($asn && $this->isBlockedASN($asn)) {
-            $this->blockAccess('asn-blocked', $ip, $country, $asn);
+            $this->blockAccess('asn-blocked', $ip, $country, $asn, $userAgent);
             return;
         }
         
         // === PRIORITY 8: GLOBAL RULES (bots, paths, UA, referer) ===
         if ($this->checkGlobalRules($ip, $userAgent, $path, $referer)) {
-            $this->blockAccess('global', $ip, $country, $asn);
+            $this->blockAccess('global', $ip, $country, $asn, $userAgent);
             return;
         }
         
         // === PRIORITY 9: COUNTRY BLOCKING (blacklist/whitelist) ===
         if ($country && $this->checkCountryBlocking($country)) {
-            $this->blockAccess('country', $ip, $country, $asn);
+            $this->blockAccess('country', $ip, $country, $asn, $userAgent);
             return;
         }
         
@@ -293,7 +320,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         if ($this->city_blocking_enabled && $this->geoipCityReader) {
             $cityData = $this->getCityData($ip);
             if ($cityData && $this->checkCityBlocking($cityData)) {
-                $this->blockAccess('city-blocked', $ip, $country, $asn);
+                $this->blockAccess('city-blocked', $ip, $country, $asn, $userAgent);
                 return;
             }
         }
@@ -302,20 +329,20 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         if ($this->subdivision_blocking_enabled && $this->geoipCityReader) {
             $cityData = $this->getCityData($ip);
             if ($cityData && $this->checkSubdivisionBlocking($cityData)) {
-                $this->blockAccess('subdivision-blocked', $ip, $country, $asn);
+                $this->blockAccess('subdivision-blocked', $ip, $country, $asn, $userAgent);
                 return;
             }
         }
         
         // === PRIORITY 10: COUNTRY-SPECIFIC RULES ===
         if ($country && $this->checkCountryRules($country, $userAgent, $path, $referer)) {
-            $this->blockAccess('country-rule', $ip, $country, $asn);
+            $this->blockAccess('country-rule', $ip, $country, $asn, $userAgent);
             return;
         }
         
         // === ACCESS ALLOWED ===
         if ($this->enable_stats_logging) {
-            $this->logAccess($ip, $country, $asn, true, '');
+            $this->logAccess($ip, $country, $asn, true, '', $userAgent);
         }
     }
 
@@ -408,9 +435,9 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     /**
      * Show JS Challenge page
      */
-    protected function showJSChallenge($ip) {
+    protected function showJSChallenge($ip, $userAgent = '') {
         if ($this->enable_stats_logging) {
-            $this->logAccess($ip, null, null, false, 'js-challenge');
+            $this->logAccess($ip, null, null, false, 'js-challenge', $userAgent);
         }
         
         http_response_code(403);
@@ -846,7 +873,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
                     }
                 }
             } catch (\Exception $e) {
-                $this->log("WireWall: Error fetching geo data for {$ip}: " . $e->getMessage());
+                $this->wire('log')->save('wirewall', "WireWall: Error fetching geo data for {$ip}: " . $e->getMessage());
             }
         }
         
@@ -894,7 +921,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         } catch (\Exception $e) {
             // IP not found or error - log it
             if ($this->enable_stats_logging) {
-                $this->wire('log')->save('wirewall-debug', "getCityData error for {$ip}: " . $e->getMessage());
+                $this->wire('log')->save('wirewall', "getCityData error for {$ip}: " . $e->getMessage());
             }
             return null;
         }
@@ -946,11 +973,47 @@ class WireWall extends WireData implements Module, ConfigurableModule {
                 return true;
             }
             
-            // Check Sec-CH-UA for modern Chrome (90+)
-            if (preg_match('/Chrome\/(\d+)/', $userAgent, $matches)) {
+            // Check Chrome version for outdated/automation detection
+            if (preg_match('/Chrome\/(\d+)\.(\d+)/', $userAgent, $matches)) {
                 $chromeVersion = (int)$matches[1];
+                $chromeMinor = (int)$matches[2];
+                
                 // Chrome 90+ should have Sec-CH-UA header
                 if ($chromeVersion >= 90 && empty($_SERVER['HTTP_SEC_CH_UA'])) {
+                    return true; // Likely automation/fake
+                }
+                
+                // Detect very outdated Chrome (older than 100 = likely automation)
+                // Current Chrome is 130+ (2025), anything below 100 is 3+ years old
+                if ($chromeVersion < 100) {
+                    // Could be automation masking as old Chrome
+                    // Check if has modern headers - if yes, it's fake
+                    if (!empty($_SERVER['HTTP_SEC_FETCH_SITE']) || 
+                        !empty($_SERVER['HTTP_SEC_FETCH_MODE']) ||
+                        !empty($_SERVER['HTTP_SEC_CH_UA'])) {
+                        return true; // Old UA + modern headers = fake
+                    }
+                }
+                
+                // Additional check: Very old Chrome version + perfect headers = suspicious
+                if ($chromeVersion < 95) {
+                    // Chrome 91-94 is from 2021, likely Puppeteer/Selenium default
+                    // Real users don't run browsers 4+ years old
+                    if ($hasAcceptLanguage && $hasAcceptEncoding && $hasAccept) {
+                        // Too perfect for an old browser, likely automation
+                        return true;
+                    }
+                }
+            }
+            
+            // Check for missing Sec-Fetch headers (modern browsers send them)
+            $hasSecFetchSite = !empty($_SERVER['HTTP_SEC_FETCH_SITE']);
+            $hasSecFetchMode = !empty($_SERVER['HTTP_SEC_FETCH_MODE']);
+            
+            // Modern Chrome/Firefox should send Sec-Fetch headers
+            if (preg_match('/Chrome\/(\d+)/', $userAgent, $matches)) {
+                if ((int)$matches[1] >= 76 && (!$hasSecFetchSite || !$hasSecFetchMode)) {
+                    // Chrome 76+ without Sec-Fetch = likely headless
                     return true;
                 }
             }
@@ -1145,6 +1208,78 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     }
 
     /**
+     * Check if request is from an allowed bot or IP (whitelist/exceptions)
+     * Returns true if this request should bypass WireWall completely
+     */
+    /**
+     * Check if request is from an allowed bot or IP (whitelist/exceptions)
+     * Returns true if this request should bypass WireWall completely
+     */
+    protected function isAllowedBot($userAgent, $ip, $asn = null) {
+        // Check allowed User-Agents
+        if ($this->allowedUserAgents) {
+            $allowedAgents = $this->parseRules($this->allowedUserAgents);
+            foreach ($allowedAgents as $pattern) {
+                $pattern = trim($pattern);
+                if (empty($pattern)) continue;
+                
+                // Case-insensitive match
+                if (stripos($userAgent, $pattern) !== false) {
+                    return true;
+                }
+            }
+        }
+        
+        // Check allowed IPs (supports CIDR)
+        if ($this->allowedIPs) {
+            $allowedIPs = $this->parseRules($this->allowedIPs);
+            foreach ($allowedIPs as $allowedIP) {
+                $allowedIP = trim($allowedIP);
+                if (empty($allowedIP)) continue;
+                
+                // Check if IP matches (exact or CIDR)
+                if ($this->matchIPRange($ip, $allowedIP)) {
+                    return true;
+                }
+            }
+        }
+        
+        // Check allowed ASNs (Autonomous System Numbers)
+        if ($this->allowedASNs && $asn) {
+            $allowedASNs = $this->parseRules($this->allowedASNs);
+            
+            foreach ($allowedASNs as $allowedASN) {
+                $allowedASN = trim($allowedASN);
+                if (empty($allowedASN)) continue;
+                
+                // Extract ASN number from both strings
+                // Supports: "AS15169 Google", "15169", "AS15169"
+                preg_match('/(?:AS)?(\d+)/i', $asn, $matches1);
+                preg_match('/(?:AS)?(\d+)/i', $allowedASN, $matches2);
+                
+                $asnNumber = $matches1[1] ?? '';
+                $allowedNumber = $matches2[1] ?? '';
+                
+                // Match by ASN number
+                if ($asnNumber && $allowedNumber && $asnNumber === $allowedNumber) {
+                    return true;
+                }
+                
+                // Match by organization name (case-insensitive)
+                // This allows: "Google", "GOOGLE", "google"
+                if (strlen($allowedASN) > 2 && !is_numeric($allowedASN) && stripos($allowedASN, 'AS') !== 0) {
+                    // It's a name, not a number
+                    if (stripos($asn, $allowedASN) !== false) {
+                        return true;
+                    }
+                }
+            }
+        }
+        
+        return false;
+    }
+
+    /**
      * Check country-specific rules
      */
     protected function checkCountryRules($country, $userAgent, $path, $referer) {
@@ -1309,7 +1444,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             $willBlock = ($mode === 'blacklist' && $subdivisionBlocked) || ($mode === 'whitelist' && !$subdivisionBlocked);
             
             if ($willBlock) {
-                $this->wire('log')->save('wirewall-debug', 
+                $this->wire('log')->save('wirewall', 
                     "Subdivision check: {$regionName}, {$countryCode} | Mode: {$mode} | Matched: {$matchedRule} | Will block: YES");
             }
         }
@@ -1483,9 +1618,9 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     /**
      * Block access and show block page/redirect/404
      */
-    protected function blockAccess($reason, $ip, $country, $asn) {
+    protected function blockAccess($reason, $ip, $country, $asn, $userAgent = '') {
         if ($this->enable_stats_logging) {
-            $this->logAccess($ip, $country, $asn, false, $reason);
+            $this->logAccess($ip, $country, $asn, false, $reason, $userAgent);
         }
         
         // Get city data if City database is available
@@ -1921,21 +2056,13 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     /**
      * Log access for statistics
      */
-    protected function logAccess($ip, $country, $asn, $allowed, $reason) {
+    protected function logAccess($ip, $country, $asn, $allowed, $reason, $userAgent = '') {
         $status = $allowed ? 'ALLOWED' : 'BLOCKED';
         
         // Build country string with city/region if available
         $countryStr = $country ? $country : 'Unknown';
         if ($this->geoipCityReader) {
             $cityData = $this->getCityData($ip);
-            
-            // Debug: Log what we got from getCityData
-            if ($this->enable_stats_logging && $cityData) {
-                $debugMsg = "getCityData({$ip}): city=" . ($cityData['city'] ?? 'null') . 
-                           ", region=" . ($cityData['region'] ?? 'null') . 
-                           ", country=" . ($cityData['country'] ?? 'null');
-                $this->wire('log')->save('wirewall-debug', $debugMsg);
-            }
             
             if ($cityData && ($cityData['city'] || $cityData['region'])) {
                 $cityParts = [];
@@ -1947,9 +2074,22 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             }
         }
         
-        $asnStr = $asn ? " | {$asn}" : "";
+        // Build single line log entry
+        $parts = [$status, $countryStr, $ip];
         
-        $message = "{$status} | {$countryStr} | {$ip}{$asnStr}" . ($reason ? " | {$reason}" : "");
+        if ($asn) {
+            $parts[] = $asn;
+        }
+        
+        if ($userAgent) {
+            $parts[] = 'UA: ' . substr($userAgent, 0, 100);
+        }
+        
+        if ($reason) {
+            $parts[] = $reason;
+        }
+        
+        $message = implode(' | ', $parts);
         $this->wire('log')->save('wirewall', $message);
     }
 
@@ -2031,11 +2171,80 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f = $modules->get('InputfieldCheckbox');
         $f->name = 'allowTrustedModules';
         $f->label = 'Allow AJAX from trusted modules';
-        $f->description = 'Allow AJAX requests from known ProcessWire modules (InputfieldPage, etc.)';
+        $f->description = 'Allow AJAX requests from known ProcessWire modules (FieldtypeBookmarks, InputfieldPage, etc.)';
         $f->notes = 'Recommended: Keep this enabled to allow ProcessWire modules to function properly. Disabling this may break AJAX functionality in your modules.';
         $f->icon = 'check-circle';
         $f->checked = (!isset($data['allowTrustedModules']) || $data['allowTrustedModules']) ? 'checked' : '';
         $inputfields->add($f);
+        
+        // === EXCEPTIONS / WHITELIST ===
+        $fieldset = $modules->get('InputfieldFieldset');
+        $fieldset->label = 'Exceptions / Whitelist';
+        $fieldset->description = 'Allow specific bots and IPs to bypass all WireWall checks';
+        $fieldset->collapsed = Inputfield::collapsedNo;
+        $fieldset->icon = 'check-square';
+        
+        // Allowed User-Agents
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'allowedUserAgents';
+        $f->label = 'Allowed User-Agents (Bots Whitelist)';
+        $f->description = 'User-Agent patterns to allow (one per line). These bots will bypass ALL WireWall checks.';
+        $f->notes = 'Common legitimate bots:
+• Googlebot - Google Search
+• Bingbot - Bing Search  
+• Yandex - Yandex Search
+• facebookexternalhit - Facebook crawling
+• Slackbot - Slack link previews
+• LinkedInBot - LinkedIn
+• Twitterbot - Twitter cards
+• WhatsApp - WhatsApp previews
+• Applebot - Apple Search';
+        $f->rows = 10;
+        $f->value = isset($data['allowedUserAgents']) ? $data['allowedUserAgents'] : "Googlebot\nBingbot\nYandex\nfacebookexternalhit\nSlackbot\nLinkedInBot\nTwitterbot\nWhatsApp\nApplebot";
+        $f->icon = 'robot';
+        $fieldset->add($f);
+        
+        // Allowed IPs
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'allowedIPs';
+        $f->label = 'Allowed IPs (IP Whitelist)';
+        $f->description = 'IP addresses or CIDR ranges to allow (one per line). These IPs will bypass ALL WireWall checks.';
+        $f->notes = 'Examples:
+• 66.249.64.0/19 - Google Bot IPs
+• 157.55.39.0/24 - Bing Bot IPs  
+• 77.88.5.0/24 - Yandex Bot IPs
+• 192.168.1.100 - Single IP
+• 10.0.0.0/8 - Private network
+
+For Google Bot IPs, see: https://developers.google.com/search/docs/crawling-indexing/verifying-googlebot';
+        $f->rows = 8;
+        $f->value = isset($data['allowedIPs']) ? $data['allowedIPs'] : '';
+        $f->icon = 'globe';
+        $fieldset->add($f);
+        
+        // Allowed ASNs
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'allowedASNs';
+        $f->label = 'Allowed ASNs (Autonomous System Numbers)';
+        $f->description = 'ASN numbers or organization names to allow (one per line). These ASNs will bypass ALL WireWall checks.';
+        $f->notes = 'Major services ASNs:
+• AS15169 or 15169 - Google
+• AS8075 or 8075 - Microsoft (Bing)
+• AS32934 or 32934 - Facebook
+• AS13238 or 13238 - Yandex
+• AS16509 or 16509 - Amazon AWS
+• AS54113 or 54113 - Fastly CDN
+• AS13335 or 13335 - Cloudflare
+• AS46489 or 46489 - Twilio
+
+You can use ASN numbers (15169) or with AS prefix (AS15169) or organization names (Google).
+MaxMind GeoLite2 ASN database required for this feature.';
+        $f->rows = 8;
+        $f->value = isset($data['allowedASNs']) ? $data['allowedASNs'] : "15169\n8075\n32934\n13238";
+        $f->icon = 'sitemap';
+        $fieldset->add($f);
+        
+        $inputfields->add($fieldset);
         
         // === CACHE MANAGEMENT ===
         $fieldset = $modules->get('InputfieldFieldset');
