@@ -1,7 +1,7 @@
 <?php namespace ProcessWire;
 
 /**
- * WireWall 1.1.9 - Advanced Traffic Firewall
+ * WireWall 1.2.0 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -13,9 +13,9 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.1.9
+ * @version 1.2.0
  * @author Maxim Alex
- * @date December 19, 2025
+ * @date December 22, 2025
  * @requires ProcessWire 3.0.200+, PHP 8.1+
  */
 
@@ -25,7 +25,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 119,
+            'version' => 120,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -2177,71 +2177,18 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f->checked = (!isset($data['allowTrustedModules']) || $data['allowTrustedModules']) ? 'checked' : '';
         $inputfields->add($f);
         
-        // === EXCEPTIONS / WHITELIST ===
+        // === STATISTICS & LOGGING ===
         $fieldset = $modules->get('InputfieldFieldset');
-        $fieldset->label = 'Exceptions / Whitelist';
-        $fieldset->description = 'Allow specific bots and IPs to bypass all WireWall checks';
+        $fieldset->label = 'Statistics & Logging';
         $fieldset->collapsed = Inputfield::collapsedNo;
-        $fieldset->icon = 'check-square';
+        $fieldset->icon = 'bar-chart';
         
-        // Allowed User-Agents
-        $f = $modules->get('InputfieldTextarea');
-        $f->name = 'allowedUserAgents';
-        $f->label = 'Allowed User-Agents (Bots Whitelist)';
-        $f->description = 'User-Agent patterns to allow (one per line). These bots will bypass ALL WireWall checks.';
-        $f->notes = 'Common legitimate bots:
-• Googlebot - Google Search
-• Bingbot - Bing Search  
-• Yandex - Yandex Search
-• facebookexternalhit - Facebook crawling
-• Slackbot - Slack link previews
-• LinkedInBot - LinkedIn
-• Twitterbot - Twitter cards
-• WhatsApp - WhatsApp previews
-• Applebot - Apple Search';
-        $f->rows = 10;
-        $f->value = isset($data['allowedUserAgents']) ? $data['allowedUserAgents'] : "Googlebot\nBingbot\nYandex\nfacebookexternalhit\nSlackbot\nLinkedInBot\nTwitterbot\nWhatsApp\nApplebot";
-        $f->icon = 'robot';
-        $fieldset->add($f);
-        
-        // Allowed IPs
-        $f = $modules->get('InputfieldTextarea');
-        $f->name = 'allowedIPs';
-        $f->label = 'Allowed IPs (IP Whitelist)';
-        $f->description = 'IP addresses or CIDR ranges to allow (one per line). These IPs will bypass ALL WireWall checks.';
-        $f->notes = 'Examples:
-• 66.249.64.0/19 - Google Bot IPs
-• 157.55.39.0/24 - Bing Bot IPs  
-• 77.88.5.0/24 - Yandex Bot IPs
-• 192.168.1.100 - Single IP
-• 10.0.0.0/8 - Private network
-
-For Google Bot IPs, see: https://developers.google.com/search/docs/crawling-indexing/verifying-googlebot';
-        $f->rows = 8;
-        $f->value = isset($data['allowedIPs']) ? $data['allowedIPs'] : '';
-        $f->icon = 'globe';
-        $fieldset->add($f);
-        
-        // Allowed ASNs
-        $f = $modules->get('InputfieldTextarea');
-        $f->name = 'allowedASNs';
-        $f->label = 'Allowed ASNs (Autonomous System Numbers)';
-        $f->description = 'ASN numbers or organization names to allow (one per line). These ASNs will bypass ALL WireWall checks.';
-        $f->notes = 'Major services ASNs:
-• AS15169 or 15169 - Google
-• AS8075 or 8075 - Microsoft (Bing)
-• AS32934 or 32934 - Facebook
-• AS13238 or 13238 - Yandex
-• AS16509 or 16509 - Amazon AWS
-• AS54113 or 54113 - Fastly CDN
-• AS13335 or 13335 - Cloudflare
-• AS46489 or 46489 - Twilio
-
-You can use ASN numbers (15169) or with AS prefix (AS15169) or organization names (Google).
-MaxMind GeoLite2 ASN database required for this feature.';
-        $f->rows = 8;
-        $f->value = isset($data['allowedASNs']) ? $data['allowedASNs'] : "15169\n8075\n32934\n13238";
-        $f->icon = 'sitemap';
+        $f = $modules->get('InputfieldCheckbox');
+        $f->name = 'enable_stats_logging';
+        $f->label = 'Enable Statistics Logging';
+        $f->description = 'Log all blocked and allowed requests with detailed information';
+        $f->notes = 'View logs: Admin → Setup → Logs → wirewall';
+        $f->checked = isset($data['enable_stats_logging']) && $data['enable_stats_logging'] ? 'checked' : '';
         $fieldset->add($f);
         
         $inputfields->add($fieldset);
@@ -2922,6 +2869,75 @@ US:block_referer:spam.com';
         
         $inputfields->add($fieldset);
         
+        // === EXCEPTIONS / WHITELIST ===
+        $fieldset = $modules->get('InputfieldFieldset');
+        $fieldset->label = 'Exceptions / Whitelist';
+        $fieldset->description = 'Allow specific bots and IPs to bypass all WireWall checks';
+        $fieldset->collapsed = Inputfield::collapsedNo;
+        $fieldset->icon = 'check-square';
+        
+        // Allowed User-Agents
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'allowedUserAgents';
+        $f->label = 'Allowed User-Agents (Bots Whitelist)';
+        $f->description = 'User-Agent patterns to allow (one per line). These bots will bypass ALL WireWall checks.';
+        $f->notes = 'Common legitimate bots:
+• Googlebot - Google Search
+• Bingbot - Bing Search  
+• Yandex - Yandex Search
+• facebookexternalhit - Facebook crawling
+• Slackbot - Slack link previews
+• LinkedInBot - LinkedIn
+• Twitterbot - Twitter cards
+• WhatsApp - WhatsApp previews
+• Applebot - Apple Search';
+        $f->rows = 10;
+        $f->value = isset($data['allowedUserAgents']) ? $data['allowedUserAgents'] : "Googlebot\nBingbot\nYandex\nfacebookexternalhit\nSlackbot\nLinkedInBot\nTwitterbot\nWhatsApp\nApplebot";
+        $f->icon = 'robot';
+        $fieldset->add($f);
+        
+        // Allowed IPs
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'allowedIPs';
+        $f->label = 'Allowed IPs (IP Whitelist)';
+        $f->description = 'IP addresses or CIDR ranges to allow (one per line). These IPs will bypass ALL WireWall checks.';
+        $f->notes = 'Examples:
+• 66.249.64.0/19 - Google Bot IPs
+• 157.55.39.0/24 - Bing Bot IPs  
+• 77.88.5.0/24 - Yandex Bot IPs
+• 192.168.1.100 - Single IP
+• 10.0.0.0/8 - Private network
+
+For Google Bot IPs, see: https://developers.google.com/search/docs/crawling-indexing/verifying-googlebot';
+        $f->rows = 8;
+        $f->value = isset($data['allowedIPs']) ? $data['allowedIPs'] : '';
+        $f->icon = 'globe';
+        $fieldset->add($f);
+        
+        // Allowed ASNs
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'allowedASNs';
+        $f->label = 'Allowed ASNs (Autonomous System Numbers)';
+        $f->description = 'ASN numbers or organization names to allow (one per line). These ASNs will bypass ALL WireWall checks.';
+        $f->notes = 'Major services ASNs:
+• AS15169 or 15169 - Google
+• AS8075 or 8075 - Microsoft (Bing)
+• AS32934 or 32934 - Facebook
+• AS13238 or 13238 - Yandex
+• AS16509 or 16509 - Amazon AWS
+• AS54113 or 54113 - Fastly CDN
+• AS13335 or 13335 - Cloudflare
+• AS46489 or 46489 - Twilio
+
+You can use ASN numbers (15169) or with AS prefix (AS15169) or organization names (Google).
+MaxMind GeoLite2 ASN database required for this feature.';
+        $f->rows = 8;
+        $f->value = isset($data['allowedASNs']) ? $data['allowedASNs'] : "15169\n8075\n32934\n13238";
+        $f->icon = 'sitemap';
+        $fieldset->add($f);
+        
+        $inputfields->add($fieldset);
+        
         // === BLOCK ACTION ===
         $fieldset = $modules->get('InputfieldFieldset');
         $fieldset->label = 'Block Action';
@@ -2951,21 +2967,6 @@ US:block_referer:spam.com';
         $f->value = $data['block_message'] ?? 'Access from your location is currently unavailable.';
         $f->rows = 3;
         $f->showIf = 'block_action=show_page';
-        $fieldset->add($f);
-        
-        $inputfields->add($fieldset);
-        
-        // === STATISTICS ===
-        $fieldset = $modules->get('InputfieldFieldset');
-        $fieldset->label = 'Statistics & Logging';
-        $fieldset->collapsed = Inputfield::collapsedNo;
-        
-        $f = $modules->get('InputfieldCheckbox');
-        $f->name = 'enable_stats_logging';
-        $f->label = 'Enable Statistics Logging';
-        $f->description = 'Log all blocked and allowed requests with detailed information';
-        $f->notes = 'View logs: Admin → Setup → Logs → wirewall';
-        $f->checked = isset($data['enable_stats_logging']) && $data['enable_stats_logging'] ? 'checked' : '';
         $fieldset->add($f);
         
         $inputfields->add($fieldset);
