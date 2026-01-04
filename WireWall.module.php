@@ -1,7 +1,7 @@
 <?php namespace ProcessWire;
 
 /**
- * WireWall 1.2.0 - Advanced Traffic Firewall
+ * WireWall 1.3.2 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -13,9 +13,9 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.2.0
+ * @version 1.3.2
  * @author Maxim Alex
- * @date December 22, 2025
+ * @date January 3, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
  */
 
@@ -25,7 +25,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 120,
+            'version' => 132,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -53,6 +53,37 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     protected $geoipReader = null;
     protected $geoipAsnReader = null;
     protected $geoipCityReader = null;
+
+    /**
+     * Get WireWall data directory path (persistent across updates)
+     * 
+     * Data stored in /site/assets/ to prevent deletion during updates
+     * This directory is NOT deleted when module is updated via git or admin
+     */
+    protected function getDataPath() {
+        return $this->wire('config')->paths->assets . 'WireWall/';
+    }
+    
+    /**
+     * Get GeoIP directory path (persistent across updates)
+     */
+    protected function getGeoIPPath() {
+        return $this->getDataPath() . 'geoip/';
+    }
+    
+    /**
+     * Get vendor directory path (persistent across updates)
+     */
+    protected function getVendorPath() {
+        return $this->getDataPath() . 'vendor/';
+    }
+    
+    /**
+     * Get composer autoload path (persistent across updates)
+     */
+    protected function getComposerAutoloadPath() {
+        return $this->getVendorPath() . 'autoload.php';
+    }
 
     /**
      * Get cache file path for a key
@@ -113,6 +144,24 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     public function init() {
         // Load module settings explicitly (fixes ProcessWire not loading new fields)
         $data = $this->wire('modules')->getModuleConfigData($this);
+        
+        // Normalize checkbox values: convert empty strings to 0, keep 1 as is
+        // This supports old configs with "" and new configs with 0/1
+        $checkboxFields = [
+            'enabled', 'allowTrustedModules', 'city_blocking_enabled', 
+            'subdivision_blocking_enabled', 'block_proxy_vpn_tor', 
+            'block_datacenters', 'js_challenge_enabled', 'rate_limit_enabled',
+            'block_bad_bots', 'block_search_bots', 'block_ai_bots', 
+            'block_other_bots', 'enable_stats_logging'
+        ];
+        
+        foreach ($checkboxFields as $field) {
+            if (isset($data[$field])) {
+                // Convert: "" → 0, "1" → 1, 1 → 1, anything else → 0
+                $this->$field = ($data[$field] == 1 || $data[$field] === '1') ? 1 : 0;
+            }
+        }
+        
         if (isset($data['allowedASNs'])) {
             $this->allowedASNs = $data['allowedASNs'];
         }
@@ -134,25 +183,67 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             }
         }
         
+        // Hook to normalize config before saving
+        $this->addHookBefore('Modules::saveModuleConfigData', $this, 'normalizeConfigBeforeSave');
+        
         // Early hook BEFORE page rendering for speed
         $this->addHookBefore('ProcessPageView::execute', $this, 'checkAccess');
         
         // Initialize MaxMind GeoIP readers if available
         $this->initializeGeoIP();
     }
+    
+    /**
+     * Normalize config data before saving
+     * Converts empty strings to 0 for checkbox fields
+     * Adds version number to config
+     */
+    protected function normalizeConfigBeforeSave(HookEvent $event) {
+        // Only process WireWall module
+        $module = $event->arguments(0);
+        if ($module !== $this && $module !== 'WireWall') return;
+        
+        $data = $event->arguments(1);
+        
+        // Normalize all checkbox fields: "" → 0, "1" → 1, 1 → 1
+        $checkboxFields = [
+            'enabled', 'allowTrustedModules', 'city_blocking_enabled', 
+            'subdivision_blocking_enabled', 'block_proxy_vpn_tor', 
+            'block_datacenters', 'js_challenge_enabled', 'rate_limit_enabled',
+            'block_bad_bots', 'block_search_bots', 'block_ai_bots', 
+            'block_other_bots', 'enable_stats_logging'
+        ];
+        
+        foreach ($checkboxFields as $field) {
+            if (isset($data[$field])) {
+                // Convert to integer: 0 or 1
+                $data[$field] = ($data[$field] == 1 || $data[$field] === '1') ? 1 : 0;
+            }
+        }
+        
+        // Add version number to config
+        $moduleInfo = self::getModuleInfo();
+        $data['version'] = $moduleInfo['version'];
+        
+        // Update event arguments
+        $event->arguments(1, $data);
+    }
 
     /**
      * Initialize MaxMind GeoIP readers
      * 
+     * Uses /site/assets/WireWall/ instead of module directory
+     * This prevents data loss during module updates
+     * 
      * To setup MaxMind:
      * 1. Register on maxmind.com
      * 2. Download GeoLite2-Country.mmdb and GeoLite2-ASN.mmdb
-     * 3. Place in /site/modules/WireWall/geoip/
-     * 4. Run: composer require geoip2/geoip2:^2.0 (in module directory)
+     * 3. Place in /site/assets/WireWall/geoip/
+     * 4. Run: composer require geoip2/geoip2:^2.0 (in /site/assets/WireWall/)
      */
     protected function initializeGeoIP() {
-        $geoipDir = $this->wire('config')->paths->siteModules . 'WireWall/geoip/';
-        $autoload = $this->wire('config')->paths->siteModules . 'WireWall/vendor/autoload.php';
+        $geoipDir = $this->getGeoIPPath();
+        $autoload = $this->getComposerAutoloadPath();
         
         // Check if composer autoload exists
         if (!file_exists($autoload)) {
@@ -1010,9 +1101,13 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             $hasSecFetchSite = !empty($_SERVER['HTTP_SEC_FETCH_SITE']);
             $hasSecFetchMode = !empty($_SERVER['HTTP_SEC_FETCH_MODE']);
             
-            // Modern Chrome/Firefox should send Sec-Fetch headers
+            // Modern Chrome should send Sec-Fetch headers
+            // NOTE: Firefox doesn't always send Sec-Fetch, so check only for Chrome
             if (preg_match('/Chrome\/(\d+)/', $userAgent, $matches)) {
-                if ((int)$matches[1] >= 76 && (!$hasSecFetchSite || !$hasSecFetchMode)) {
+                // Skip check if also contains Firefox/Edge (they may contain Chrome/ in UA)
+                $isRealChrome = !preg_match('/Firefox|Edg/', $userAgent);
+                
+                if ($isRealChrome && (int)$matches[1] >= 76 && (!$hasSecFetchSite || !$hasSecFetchMode)) {
                     // Chrome 76+ without Sec-Fetch = likely headless
                     return true;
                 }
@@ -1157,13 +1252,43 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     }
 
     /**
-     * Check if request is from a trusted ProcessWire module (AJAX)
+     * Check if request is from a trusted ProcessWire module or API endpoint
      * Returns true if this is an allowed module request that should bypass WireWall
+     * 
+     * Supports:
+     * - Core ProcessWire modules (POST AJAX)
+     * - RockFrontend AJAX endpoints (/ajax/)
+     * - API endpoints (/api/, /api2/, etc.) - ALL HTTP methods
+     * - Custom trusted paths (configurable)
      */
     protected function isAllowedModuleRequest() {
         $input = $this->wire('input');
+        $requestUri = $_SERVER['REQUEST_URI'] ?? '';
         
-        // Only check POST AJAX requests
+        // === API ENDPOINTS CHECK (all HTTP methods) ===
+        // API endpoints don't require POST or AJAX headers
+        $apiPaths = [
+            '/api/',    // AppApi and custom APIs
+            '/api2/',   // AppApi v2
+            '/rest/',   // REST API
+        ];
+        
+        // Add custom API paths from module config
+        $customApiPaths = $this->get('custom_api_paths');
+        if (!empty($customApiPaths)) {
+            $customApiPathsList = array_filter(array_map('trim', explode("\n", $customApiPaths)));
+            $apiPaths = array_merge($apiPaths, $customApiPathsList);
+        }
+        
+        // Check if request is to an API endpoint
+        foreach ($apiPaths as $apiPath) {
+            if (stripos($requestUri, $apiPath) !== false) {
+                return true; // Allow all HTTP methods to API endpoints
+            }
+        }
+        
+        // === AJAX REQUESTS CHECK (POST only) ===
+        // Only check POST AJAX requests for modules
         if (!$input->requestMethod('POST')) {
             return false;
         }
@@ -1197,20 +1322,30 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             }
         }
         
-        // Check if request URL contains /processwire/ or /admin/
-        $requestUri = $_SERVER['REQUEST_URI'] ?? '';
-        if (stripos($requestUri, '/processwire/') !== false || 
-            stripos($requestUri, '/admin/') !== false) {
-            return true;
+        // Default trusted AJAX paths
+        $trustedPaths = [
+            '/processwire/',  // Admin area
+            '/admin/',        // Custom admin path
+            '/ajax/',         // RockFrontend and custom AJAX endpoints
+        ];
+        
+        // Add custom trusted paths from module config
+        $customPaths = $this->get('custom_trusted_paths');
+        if (!empty($customPaths)) {
+            $customPathsList = array_filter(array_map('trim', explode("\n", $customPaths)));
+            $trustedPaths = array_merge($trustedPaths, $customPathsList);
+        }
+        
+        // Check URL against all trusted AJAX paths
+        foreach ($trustedPaths as $trustedPath) {
+            if (stripos($requestUri, $trustedPath) !== false) {
+                return true;
+            }
         }
         
         return false;
     }
 
-    /**
-     * Check if request is from an allowed bot or IP (whitelist/exceptions)
-     * Returns true if this request should bypass WireWall completely
-     */
     /**
      * Check if request is from an allowed bot or IP (whitelist/exceptions)
      * Returns true if this request should bypass WireWall completely
@@ -1238,7 +1373,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
                 if (empty($allowedIP)) continue;
                 
                 // Check if IP matches (exact or CIDR)
-                if ($this->matchIPRange($ip, $allowedIP)) {
+                if ($this->matchIP($ip, $allowedIP)) {
                     return true;
                 }
             }
@@ -1347,6 +1482,9 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      * Check if city should be blocked (requires GeoLite2-City)
      */
     protected function checkCityBlocking($cityData) {
+        // Check if city blocking is enabled (must be exactly 1)
+        if ($this->city_blocking_enabled !== 1) return false;
+        
         if (!$this->blocked_cities) return false;
         if (!$cityData || !isset($cityData['city'])) return false;
         
@@ -1399,6 +1537,9 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      * Check if subdivision/region should be blocked (requires GeoLite2-City)
      */
     protected function checkSubdivisionBlocking($cityData) {
+        // Check if subdivision blocking is enabled (must be exactly 1)
+        if ($this->subdivision_blocking_enabled !== 1) return false;
+        
         if (!$this->blocked_subdivisions) return false;
         if (!$cityData || !isset($cityData['region'])) return false;
         
@@ -1518,11 +1659,43 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     }
 
     /**
-     * Match CIDR notation (supports IPv4)
+     * Match CIDR notation (supports both IPv4 and IPv6)
+     * 
+     * Examples:
+     * IPv4: 192.168.0.0/16, 10.0.0.0/8
+     * IPv6: 2601:41:c780:6740::/64, 2001:db8::/32
      */
     protected function matchCIDR($ip, $cidr) {
-        list($subnet, $bits) = explode('/', $cidr);
+        // Split CIDR into subnet and prefix length
+        if (strpos($cidr, '/') === false) {
+            return false;
+        }
         
+        list($subnet, $bits) = explode('/', $cidr);
+        $bits = (int)$bits;
+        
+        // Detect IP version
+        $isIPv6 = strpos($ip, ':') !== false;
+        $isSubnetIPv6 = strpos($subnet, ':') !== false;
+        
+        // IP and subnet must be same version
+        if ($isIPv6 !== $isSubnetIPv6) {
+            return false;
+        }
+        
+        if ($isIPv6) {
+            // IPv6 CIDR matching
+            return $this->matchIPv6CIDR($ip, $subnet, $bits);
+        } else {
+            // IPv4 CIDR matching (original logic)
+            return $this->matchIPv4CIDR($ip, $subnet, $bits);
+        }
+    }
+    
+    /**
+     * Match IPv4 CIDR
+     */
+    protected function matchIPv4CIDR($ip, $subnet, $bits) {
         // Convert to long integers
         $ip_long = ip2long($ip);
         $subnet_long = ip2long($subnet);
@@ -1531,11 +1704,51 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             return false;
         }
         
+        // Validate prefix length (0-32 for IPv4)
+        if ($bits < 0 || $bits > 32) {
+            return false;
+        }
+        
         // Create mask
-        $mask = -1 << (32 - (int)$bits);
+        $mask = -1 << (32 - $bits);
         $subnet_long &= $mask;
         
         return ($ip_long & $mask) == $subnet_long;
+    }
+    
+    /**
+     * Match IPv6 CIDR
+     * 
+     * Example: 2601:41:c780:6740::/64
+     */
+    protected function matchIPv6CIDR($ip, $subnet, $bits) {
+        // Convert IP addresses to binary format
+        $ip_bin = @inet_pton($ip);
+        $subnet_bin = @inet_pton($subnet);
+        
+        if ($ip_bin === false || $subnet_bin === false) {
+            return false;
+        }
+        
+        // Validate prefix length (0-128 for IPv6)
+        if ($bits < 0 || $bits > 128) {
+            return false;
+        }
+        
+        // Convert binary to bit string
+        $ip_bits = '';
+        $subnet_bits = '';
+        
+        for ($i = 0; $i < strlen($ip_bin); $i++) {
+            $ip_bits .= str_pad(decbin(ord($ip_bin[$i])), 8, '0', STR_PAD_LEFT);
+            $subnet_bits .= str_pad(decbin(ord($subnet_bin[$i])), 8, '0', STR_PAD_LEFT);
+        }
+        
+        // Compare only the prefix bits
+        $ip_prefix = substr($ip_bits, 0, $bits);
+        $subnet_prefix = substr($subnet_bits, 0, $bits);
+        
+        return $ip_prefix === $subnet_prefix;
     }
 
     /**
@@ -2125,6 +2338,10 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $inputfields = new InputfieldWrapper();
         $modules = wire('modules');
         
+        // Always update version in config
+        $moduleInfo = self::getModuleInfo();
+        $data['version'] = $moduleInfo['version'];
+        
         // Handle cache clearing POST request
         if (wire('input')->post('clear_cache')) {
             $type = wire('input')->post('clear_cache');
@@ -2175,6 +2392,47 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f->notes = 'Recommended: Keep this enabled to allow ProcessWire modules to function properly. Disabling this may break AJAX functionality in your modules.';
         $f->icon = 'check-circle';
         $f->checked = (!isset($data['allowTrustedModules']) || $data['allowTrustedModules']) ? 'checked' : '';
+        $inputfields->add($f);
+        
+        // Custom Trusted Paths
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'custom_trusted_paths';
+        $f->label = 'Custom Trusted AJAX Paths';
+        $f->description = 'Additional URL paths that should bypass WireWall for AJAX requests (one per line)';
+        $f->notes = 'Default trusted paths: /processwire/, /admin/, /ajax/
+Examples of custom paths:
+• /rockfrontend/ - RockFrontend module
+• /my-custom-ajax/ - Your custom AJAX directory
+• /live-search/ - Live search endpoints
+
+Note: These paths apply only to POST AJAX requests (with X-Requested-With header).
+For API endpoints, use "Custom API Paths" field below.';
+        $f->rows = 5;
+        $f->value = isset($data['custom_trusted_paths']) ? $data['custom_trusted_paths'] : '';
+        $f->icon = 'code';
+        $f->showIf = 'allowTrustedModules=1';
+        $f->collapsed = Inputfield::collapsedBlank;
+        $inputfields->add($f);
+        
+        // Custom API Paths
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'custom_api_paths';
+        $f->label = 'Custom API Paths (All HTTP Methods)';
+        $f->description = 'URL paths for API endpoints that should bypass WireWall for ALL HTTP methods (one per line)';
+        $f->notes = 'Default API paths: /api/, /api2/, /rest/
+Examples of custom API paths:
+• /graphql/ - GraphQL endpoint
+• /webhook/ - Webhook handlers
+• /v1/ - Versioned API
+• /endpoints/ - Custom API directory
+
+Important: These paths bypass WireWall for ALL HTTP methods (GET, POST, PUT, DELETE, PATCH).
+Only add paths that are secured by their own authentication (API keys, OAuth, etc.)';
+        $f->rows = 5;
+        $f->value = isset($data['custom_api_paths']) ? $data['custom_api_paths'] : '';
+        $f->icon = 'exchange';
+        $f->showIf = 'allowTrustedModules=1';
+        $f->collapsed = Inputfield::collapsedBlank;
         $inputfields->add($f);
         
         // === STATISTICS & LOGGING ===
@@ -2352,13 +2610,59 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $fieldset->label = 'Geolocation Settings';
         $fieldset->collapsed = Inputfield::collapsedNo;
         
+        // === SETUP INFORMATION ===
+        // Show important info about data location
+        $setupInfo = $modules->get('InputfieldMarkup');
+        $setupInfo->label = '⚙️ Setup Information';
+        $setupInfo->description = 'Important information about data persistence';
+        $setupInfo->icon = 'info-circle';
+        $setupInfo->collapsed = Inputfield::collapsedYes;
+        
+        $dataPath = wire('config')->paths->assets . 'WireWall/';
+        $geoipPath = $dataPath . 'geoip/';
+        $vendorPath = $dataPath . 'vendor/';
+        
+        $setupInfo->value = '<div style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 15px; border-radius: 4px; margin-bottom: 15px;">
+            <h3 style="margin: 0 0 10px 0; color: #1976d2;">🎯 What\'s New in 1.2.1</h3>
+            <p style="margin: 0 0 10px 0;"><strong>Problem solved:</strong> GeoIP databases, vendor files, and composer dependencies are NO LONGER deleted during module updates!</p>
+            <p style="margin: 0;"><strong>New location:</strong> All persistent data is now stored in:</p>
+            <code style="display: block; background: #fff; padding: 10px; margin: 10px 0; border-radius: 4px;">' . htmlspecialchars($dataPath) . '</code>
+        </div>
+        
+        <div style="background: #fff3e0; border-left: 4px solid #ff9800; padding: 15px; border-radius: 4px; margin-bottom: 15px;">
+            <h3 style="margin: 0 0 10px 0; color: #f57c00;">📦 Migration (if upgrading from 1.2.0 or earlier)</h3>
+            <p style="margin: 0 0 10px 0;">Migration should happen automatically on first module load. If manual migration is needed:</p>
+            <ol style="margin: 10px 0 10px 20px; line-height: 1.8;">
+                <li>Create directory: <code>' . htmlspecialchars($dataPath) . '</code></li>
+                <li>Move GeoIP databases to: <code>' . htmlspecialchars($geoipPath) . '</code></li>
+                <li>Move vendor folder to: <code>' . htmlspecialchars($vendorPath) . '</code></li>
+                <li>Move composer.json/composer.lock to: <code>' . htmlspecialchars($dataPath) . '</code></li>
+                <li>Run: <code>cd ' . htmlspecialchars($dataPath) . ' && composer install</code></li>
+            </ol>
+        </div>
+        
+        <div style="background: #f1f8e9; border-left: 4px solid #8bc34a; padding: 15px; border-radius: 4px;">
+            <h3 style="margin: 0 0 10px 0; color: #689f38;">✅ Fresh Installation</h3>
+            <ol style="margin: 10px 0 10px 20px; line-height: 1.8;">
+                <li>Download MaxMind GeoLite2 databases</li>
+                <li>Place in: <code>' . htmlspecialchars($geoipPath) . '</code></li>
+                <li>Run: <code>cd ' . htmlspecialchars($dataPath) . ' && composer require geoip2/geoip2:^2.0</code></li>
+            </ol>
+            <p style="margin: 10px 0 0 0;"><strong>📁 Current paths:</strong></p>
+            <ul style="margin: 5px 0 0 20px; font-family: monospace; font-size: 13px;">
+                <li>Data: ' . htmlspecialchars($dataPath) . '</li>
+                <li>GeoIP: ' . htmlspecialchars($geoipPath) . '</li>
+                <li>Vendor: ' . htmlspecialchars($vendorPath) . '</li>
+            </ul>
+        </div>';
+        
+        $fieldset->add($setupInfo);
+        
         // Check if MaxMind databases are installed
-        $modulePath = wire('config')->paths->siteModules . 'WireWall/';
-        $geoipPath = $modulePath . 'geoip/';
         $countryDbPath = $geoipPath . 'GeoLite2-Country.mmdb';
         $asnDbPath = $geoipPath . 'GeoLite2-ASN.mmdb';
         $cityDbPath = $geoipPath . 'GeoLite2-City.mmdb';
-        $composerAutoload = $modulePath . 'vendor/autoload.php';
+        $composerAutoload = $vendorPath . 'autoload.php';
         
         $hasCountryDb = file_exists($countryDbPath);
         $hasAsnDb = file_exists($asnDbPath);
@@ -2373,6 +2677,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             // MaxMind is installed - show success status
             $f->label = 'MaxMind GeoLite2 Status';
             $f->icon = 'check-circle';
+            $f->collapsed = Inputfield::collapsedYes; // Collapse when installed
             
             $countrySize = file_exists($countryDbPath) ? round(filesize($countryDbPath) / 1024 / 1024, 2) : 0;
             $asnSize = file_exists($asnDbPath) ? round(filesize($asnDbPath) / 1024 / 1024, 2) : 0;
@@ -2469,6 +2774,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             // MaxMind not installed - show setup instructions
             $f->label = 'MaxMind Setup Instructions';
             $f->icon = 'info-circle';
+            $f->collapsed = Inputfield::collapsedNo; // Expand when not installed (show warnings)
             
             $missingItems = [];
             if (!$hasCountryDb) $missingItems[] = 'GeoLite2-Country.mmdb';
@@ -2510,7 +2816,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
                 <li>Download <strong>GeoLite2-Country.mmdb</strong> and <strong>GeoLite2-ASN.mmdb</strong> (required)</li>
                 <li><em>Optional:</em> Download <strong>GeoLite2-City.mmdb</strong> for detailed logging (city/region)</li>
                 <li>Place files in: <code>{$geoipPath}</code></li>
-                <li>Run: <code>composer require geoip2/geoip2</code> in module directory</li>
+                <li>Run: <code>cd {$dataPath} && composer require geoip2/geoip2</code></li>
                 <li>Refresh this page to see status update</li>
             </ol>
             <p><em>Without MaxMind databases, WireWall will automatically use ip-api.com (HTTP fallback). This works but is slower and has rate limits.</em></p>
@@ -2556,14 +2862,17 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         // === CITY BLOCKING ===
         $fieldset = $modules->get('InputfieldFieldset');
         $fieldset->label = 'City Blocking (Requires GeoLite2-City)';
-        $fieldset->collapsed = Inputfield::collapsedYes;
         $fieldset->description = 'Block or allow access based on city location. Requires GeoLite2-City.mmdb database.';
         
         // Check if City database is available
-        $modulePath = wire('config')->paths->siteModules . 'WireWall/';
-        $geoipPath = $modulePath . 'geoip/';
+        // Use new /site/assets/WireWall/ path (1.2.1+)
+        $dataPath = wire('config')->paths->assets . 'WireWall/';
+        $geoipPath = $dataPath . 'geoip/';
         $cityDbPath = $geoipPath . 'GeoLite2-City.mmdb';
         $hasCityDb = file_exists($cityDbPath);
+        
+        // Collapse if database is installed, expand if not (to show warning)
+        $fieldset->collapsed = $hasCityDb ? Inputfield::collapsedYes : Inputfield::collapsedNo;
         
         if (!$hasCityDb) {
             $f = $modules->get('InputfieldMarkup');
@@ -2618,8 +2927,10 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         // === SUBDIVISION/REGION BLOCKING ===
         $fieldset = $modules->get('InputfieldFieldset');
         $fieldset->label = 'Subdivision/Region Blocking (Requires GeoLite2-City)';
-        $fieldset->collapsed = Inputfield::collapsedYes;
         $fieldset->description = 'Block or allow access based on subdivision/region (state, province, oblast). Requires GeoLite2-City.mmdb database.';
+        
+        // Collapse if database is installed, expand if not (to show warning)
+        $fieldset->collapsed = $hasCityDb ? Inputfield::collapsedYes : Inputfield::collapsedNo;
         
         if (!$hasCityDb) {
             $f = $modules->get('InputfieldMarkup');
@@ -2900,13 +3211,19 @@ US:block_referer:spam.com';
         $f = $modules->get('InputfieldTextarea');
         $f->name = 'allowedIPs';
         $f->label = 'Allowed IPs (IP Whitelist)';
-        $f->description = 'IP addresses or CIDR ranges to allow (one per line). These IPs will bypass ALL WireWall checks.';
-        $f->notes = 'Examples:
+        $f->description = 'IP addresses or CIDR ranges to allow (one per line). These IPs will bypass ALL WireWall checks. Supports both IPv4 and IPv6.';
+        $f->notes = 'Examples (IPv4):
 • 66.249.64.0/19 - Google Bot IPs
 • 157.55.39.0/24 - Bing Bot IPs  
 • 77.88.5.0/24 - Yandex Bot IPs
 • 192.168.1.100 - Single IP
 • 10.0.0.0/8 - Private network
+
+Examples (IPv6):
+• 2601:41:c780:6740::/64 - IPv6 subnet
+• 2001:4860::/32 - Google IPv6 range
+• 2a00:1450::/32 - Google IPv6 range
+• 2001:db8::1 - Single IPv6 address
 
 For Google Bot IPs, see: https://developers.google.com/search/docs/crawling-indexing/verifying-googlebot';
         $f->rows = 8;
@@ -2971,6 +3288,12 @@ MaxMind GeoLite2 ASN database required for this feature.';
         
         $inputfields->add($fieldset);
         
+        // Hidden field: version (auto-updated on each save)
+        $f = $modules->get('InputfieldHidden');
+        $f->name = 'version';
+        $f->value = $data['version']; // Module version number
+        $inputfields->add($f);
+        
         return $inputfields;
     }
     
@@ -3000,12 +3323,107 @@ MaxMind GeoLite2 ASN database required for this feature.';
     }
     
     /**
-     * Module installation - create geoip directory
+     * Module installation - create persistent data directory
+     * 
+     * Creates directory in /site/assets/ instead of module directory
      */
     public function ___install() {
-        $geoipDir = $this->wire('config')->paths->siteModules . 'WireWall/geoip/';
-        if (!is_dir($geoipDir)) {
-            wireMkdir($geoipDir, true);
+        $dataPath = $this->getDataPath();
+        $geoipPath = $this->getGeoIPPath();
+        
+        // Create main data directory
+        if (!is_dir($dataPath)) {
+            wireMkdir($dataPath, true);
+        }
+        
+        // Create geoip subdirectory
+        if (!is_dir($geoipPath)) {
+            wireMkdir($geoipPath, true);
+        }
+        
+        // Create README with setup instructions
+        $readme = $dataPath . 'README.txt';
+        if (!file_exists($readme)) {
+            $content = "WireWall Data Directory\n";
+            $content .= "=======================\n\n";
+            $content .= "This directory is persistent across module updates.\n\n";
+            $content .= "Setup MaxMind GeoIP:\n";
+            $content .= "1. Download GeoLite2-Country.mmdb and GeoLite2-ASN.mmdb from maxmind.com\n";
+            $content .= "2. Place in geoip/ subdirectory\n";
+            $content .= "3. Run: composer require geoip2/geoip2:^2.0\n\n";
+            $content .= "Directory structure:\n";
+            $content .= "- geoip/        : MaxMind database files (.mmdb)\n";
+            $content .= "- vendor/       : Composer dependencies\n";
+            $content .= "- composer.json : Composer configuration\n";
+            $content .= "- composer.lock : Dependency lock file\n";
+            
+            file_put_contents($readme, $content);
+        }
+        
+        $this->wire('log')->save('wirewall', 'WireWall installed - data directory created: ' . $dataPath);
+    }
+    
+    /**
+     * Module upgrade - migrate old data if exists
+     * 
+     * Automatically migrates data from old module directory
+     */
+    public function ___upgrade($fromVersion, $toVersion) {
+        // Only run migration when upgrading to 1.2.1 (version 121)
+        if ($toVersion >= 121 && $fromVersion < 121) {
+            $this->migrateDataToAssets();
+        }
+    }
+    
+    /**
+     * Migrate data from module directory to /site/assets/WireWall/
+     * 
+     * Automatic migration of existing installations
+     */
+    protected function migrateDataToAssets() {
+        $modulePath = $this->wire('config')->paths->siteModules . 'WireWall/';
+        $dataPath = $this->getDataPath();
+        $geoipPath = $this->getGeoIPPath();
+        $vendorPath = $this->getVendorPath();
+        
+        // Create data directory if it doesn't exist
+        if (!is_dir($dataPath)) {
+            wireMkdir($dataPath, true);
+        }
+        
+        $migrated = [];
+        
+        // Migrate geoip directory
+        $oldGeoipPath = $modulePath . 'geoip/';
+        if (is_dir($oldGeoipPath) && !is_dir($geoipPath)) {
+            if (rename($oldGeoipPath, $geoipPath)) {
+                $migrated[] = 'geoip directory';
+            }
+        }
+        
+        // Migrate vendor directory
+        $oldVendorPath = $modulePath . 'vendor/';
+        if (is_dir($oldVendorPath) && !is_dir($vendorPath)) {
+            if (rename($oldVendorPath, $vendorPath)) {
+                $migrated[] = 'vendor directory';
+            }
+        }
+        
+        // Migrate composer files
+        $composerFiles = ['composer.json', 'composer.lock'];
+        foreach ($composerFiles as $file) {
+            $oldFile = $modulePath . $file;
+            $newFile = $dataPath . $file;
+            if (file_exists($oldFile) && !file_exists($newFile)) {
+                if (copy($oldFile, $newFile)) {
+                    $migrated[] = $file;
+                    @unlink($oldFile); // Remove old file after successful copy
+                }
+            }
+        }
+        
+        if (!empty($migrated)) {
+            $this->wire('log')->save('wirewall', 'Migrated to new geoip folder location: ' . implode(', ', $migrated));
         }
     }
 }
