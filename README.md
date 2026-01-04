@@ -28,7 +28,7 @@ WireWall is a powerful, production-ready security module that transforms Process
 - **Subdivision/Region Blocking** - Block states, provinces, oblasts (e.g., Pennsylvania, California, Krasnodar)
 - **MaxMind GeoLite2** - Fast, accurate local geolocation (Country, ASN, City databases)
 - **HTTP API Fallback** - Automatic fallback to ip-api.com when MaxMind unavailable
-- **IPv4/IPv6 Support** - Full support with CIDR notation
+- **IPv4/IPv6 Support** - Full support with CIDR notation (e.g., 192.168.0.0/16, 2601:41:c780:6740::/64)
 
 ### 🤖 Bot Protection
 - **Bad Bot Blocking** - Block scrapers, scanners, and malicious bots (wget, curl, scrapy, nikto, sqlmap)
@@ -64,7 +64,8 @@ WireWall is a powerful, production-ready security module that transforms Process
 - **Allowed User-Agents** - Whitelist legitimate bots (Googlebot, Bingbot, Slackbot, etc.)
 - **Allowed IPs** - Whitelist specific IPs or CIDR ranges for bot verification
 - **Allowed ASNs** - Whitelist entire networks by ASN (Google, Microsoft, Facebook, CDNs)
-- **Trusted Modules** - Automatic AJAX bypass for ProcessWire modules
+- **Trusted Modules** - Automatic AJAX bypass for ProcessWire modules (RockFrontend, AppApi)
+- **Custom API Paths** - Configure custom API endpoints that bypass all checks
 
 ---
 
@@ -313,11 +314,38 @@ Automatic AJAX bypass for ProcessWire modules:
 
 ```
 Feature: allowTrustedModules (enabled by default)
-Bypasses: ProcessWire module AJAX requests
+Bypasses: ProcessWire module AJAX requests (RockFrontend, AppApi, etc.)
 Benefits: No module conflicts, seamless operation
+Supports: All HTTP methods (GET, POST, PUT, DELETE, PATCH)
 ```
 
 Trusted modules automatically bypass WireWall checks, ensuring smooth ProcessWire operation.
+
+### Custom API Paths
+
+Configure custom API endpoints that bypass all WireWall checks:
+
+```
+Feature: Custom API Paths
+Location: Admin → Modules → WireWall → Exceptions
+Format: One path per line (e.g., /api/webhook, /graphql)
+Supports: All HTTP methods (GET, POST, PUT, DELETE, etc.)
+Use Cases: External webhooks, API endpoints, third-party integrations
+```
+
+**Example Configuration:**
+```
+/api/webhook
+/api/stripe
+/graphql
+/rest/v1
+```
+
+**Benefits:**
+- Complete bypass for API endpoints
+- Supports all HTTP methods
+- No rate limiting on API paths
+- Ideal for webhooks and integrations
 
 ---
 
