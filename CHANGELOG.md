@@ -4,6 +4,18 @@ All notable changes to WireWall are documented here.
 
 ---
 
+## 1.3.5 — February 23, 2026
+
+### Bug Fix
+
+**False positive blocks on localhost / private networks**
+
+Browsers accessing a site over `http://localhost` or a local network do not send `Sec-CH-UA` (Client Hints) or `Sec-Fetch-*` headers — these are only transmitted over HTTPS or to public origins. The fake browser detection logic was checking for the presence of these headers unconditionally, causing any real Chrome browser on localhost to be flagged as headless automation and blocked immediately on the first visit.
+
+Fixed by detecting whether `REMOTE_ADDR` is a loopback or RFC-1918 private address (`127.0.0.1`, `::1`, `192.168.*`, `10.*`, `172.16-31.*`) and skipping the Client Hints and Sec-Fetch presence checks for those requests. All other fake browser checks (headless UA patterns, missing Accept headers, outdated Chrome version heuristics) remain active.
+
+---
+
 ## 1.3.4 — February 23, 2026
 
 ### Bug Fixes

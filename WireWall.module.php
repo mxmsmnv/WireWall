@@ -1,7 +1,7 @@
 <?php namespace ProcessWire;
 
 /**
- * WireWall 1.3.4 - Advanced Traffic Firewall
+ * WireWall 1.3.5 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -13,7 +13,7 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.3.4
+ * @version 1.3.5
  * @author Maxim Alex
  * @date February 23, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
@@ -25,7 +25,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 134,
+            'version' => 135,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -1057,6 +1057,19 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             stripos($userAgent, 'Edge') !== false
         );
         
+        // Detect if request is coming from localhost / private network.
+        // Browsers on localhost do NOT send Client Hints (Sec-CH-UA) or sometimes
+        // Sec-Fetch-* headers, so header-presence checks must be skipped for these IPs.
+        $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? '';
+        $isLocalRequest = (
+            $remoteAddr === '127.0.0.1' ||
+            $remoteAddr === '::1' ||
+            substr($remoteAddr, 0, 8) === '192.168.' ||
+            substr($remoteAddr, 0, 7) === '10.0.0.' ||
+            substr($remoteAddr, 0, 4) === '10.' ||
+            preg_match('/^172\.(1[6-9]|2\d|3[01])\./', $remoteAddr)
+        );
+        
         if ($looksLikeBrowser) {
             // Real browsers ALWAYS send these headers
             $hasAcceptLanguage = !empty($_SERVER['HTTP_ACCEPT_LANGUAGE']);
@@ -1091,7 +1104,8 @@ class WireWall extends WireData implements Module, ConfigurableModule {
                 $chromeMinor = (int)$matches[2];
                 
                 // Chrome 90+ should have Sec-CH-UA header
-                if ($chromeVersion >= 90 && empty($_SERVER['HTTP_SEC_CH_UA'])) {
+                // Skip this check for localhost — browsers don't send Client Hints to http://localhost
+                if ($chromeVersion >= 90 && empty($_SERVER['HTTP_SEC_CH_UA']) && !$isLocalRequest) {
                     return true; // Likely automation/fake
                 }
                 
@@ -1128,7 +1142,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
                 // Skip check if also contains Firefox/Edge (they may contain Chrome/ in UA)
                 $isRealChrome = !preg_match('/Firefox|Edg/', $userAgent);
                 
-                if ($isRealChrome && (int)$matches[1] >= 76 && (!$hasSecFetchSite || !$hasSecFetchMode)) {
+                if ($isRealChrome && (int)$matches[1] >= 76 && (!$hasSecFetchSite || !$hasSecFetchMode) && !$isLocalRequest) {
                     // Chrome 76+ without Sec-Fetch = likely headless
                     return true;
                 }
