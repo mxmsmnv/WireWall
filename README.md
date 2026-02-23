@@ -6,39 +6,39 @@ Enterprise-grade security and firewall module for ProcessWire CMS with comprehen
 
 ---
 
-## 🛡️ Overview
+## Overview
 
 WireWall is a powerful, production-ready security module that transforms ProcessWire into a fortress. With MaxMind GeoLite2 integration, multi-API threat detection, and file-based caching that scales to millions of IPs, WireWall provides enterprise-level protection without the enterprise complexity.
 
 **Key Benefits:**
-- ⚡ **Fast** - File-based cache, 0.5-2ms GeoIP lookups with MaxMind
-- 🎯 **Precise** - 12+ priority levels, city/subdivision blocking
-- 🤖 **Smart** - AI bot detection, fake browser analysis, datacenter blocking
-- 📊 **Insightful** - Comprehensive logging with city/region data
-- 🌐 **Scalable** - Handles 1M+ IPs without database overhead
-- 🔧 **Flexible** - Extensive whitelist/exception system for legitimate traffic
+-  **Fast** - File-based cache, 0.5-2ms GeoIP lookups with MaxMind
+-  **Precise** - 12+ priority levels, city/subdivision blocking
+-  **Smart** - AI bot detection, fake browser analysis, datacenter blocking
+-  **Insightful** - Comprehensive logging with city/region data
+-  **Scalable** - Handles 1M+ IPs without database overhead
+-  **Flexible** - Extensive whitelist/exception system for legitimate traffic
 
 ---
 
-## 🔥 Core Features
+## Core Features
 
-### 🌍 Geographic Control
+### Geographic Control
 - **Country Blocking** - Block or whitelist entire countries (200+ countries)
-- **City-Level Blocking** - Block specific cities (e.g., Philadelphia, Beijing, Moscow)
+- **City-Level Blocking** - Block specific cities (e.g., Philadelphia, Beijing, Lagos)
 - **Subdivision/Region Blocking** - Block states, provinces, oblasts (e.g., Pennsylvania, California, Krasnodar)
 - **MaxMind GeoLite2** - Fast, accurate local geolocation (Country, ASN, City databases)
 - **HTTP API Fallback** - Automatic fallback to ip-api.com when MaxMind unavailable
 - **IPv4/IPv6 Support** - Full support with CIDR notation (e.g., 192.168.0.0/16, 2601:41:c780:6740::/64)
 
-### 🤖 Bot Protection
+### Bot Protection
 - **Bad Bot Blocking** - Block scrapers, scanners, and malicious bots (wget, curl, scrapy, nikto, sqlmap)
-- **Search Engine Control** - Block/allow search crawlers (Googlebot, Bingbot, Yandex, Baidu)
+- **Search Engine Control** - Block/allow search crawlers (Googlebot, Bingbot, DuckDuckBot, Baidu)
 - **AI Bot Blocking** - Block AI training bots (GPTBot, ClaudeBot, GrokBot, Perplexity, Google-Extended)
 - **Custom Bot Lists** - Define your own bot patterns to block
 - **Fake Browser Detection** - Advanced User-Agent analysis to detect spoofed browsers
 - **Headless Browser Detection** - Detect Puppeteer, Playwright, Selenium, PhantomJS
 
-### 🛡️ Security Features
+### Security Features
 - **Rate Limiting** - Configurable requests per minute with automatic temporary bans
 - **VPN/Proxy/Tor Detection** - Multi-API detection with fallback (ip-api.com, ipinfo.io, ipapi.co)
 - **Datacenter Blocking** - Block AWS, Google Cloud, DigitalOcean, Azure, and other hosting providers
@@ -47,20 +47,20 @@ WireWall is a powerful, production-ready security module that transforms Process
 - **IP Whitelist/Blacklist** - Manual override for specific IPs, ranges, and CIDR blocks
 - **ASN Whitelist** - Allow specific networks (Google, Microsoft, Facebook, etc.)
 
-### 📊 Management & Monitoring
+### Management & Monitoring
 - **File-Based Cache** - Scales to millions of IPs without database overhead
 - **Cache Management UI** - View statistics and clear cache by type
 - **Priority System** - 12+ priority levels for precise rule control
 - **Admin Protection** - Triple-layer admin area protection (never blocks admin)
 - **Detailed Logging** - City/region/ASN included in all logs
 
-### 🎨 User Experience
+### User Experience
 - **Beautiful Block Page** - Modern design with location display and wave pattern
 - **Silent 404 Mode** - Alternative stealth blocking mode
 - **Custom Redirect** - Redirect blocked users to custom URL
 - **Custom Messages** - Personalise block messages
 
-### ⚙️ Exception System
+### Exception System
 - **Allowed User-Agents** - Whitelist legitimate bots (Googlebot, Bingbot, Slackbot, etc.)
 - **Allowed IPs** - Whitelist specific IPs or CIDR ranges for bot verification
 - **Allowed ASNs** - Whitelist entire networks by ASN (Google, Microsoft, Facebook, CDNs)
@@ -69,7 +69,7 @@ WireWall is a powerful, production-ready security module that transforms Process
 
 ---
 
-## 📋 Requirements
+## Requirements
 
 - **ProcessWire:** 3.0.200 or higher
 - **PHP:** 8.1 or higher
@@ -78,7 +78,7 @@ WireWall is a powerful, production-ready security module that transforms Process
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Installation
 
@@ -99,32 +99,32 @@ Admin → Modules → WireWall → Configure
 ### Basic Configuration
 
 ```
-✓ Enable WireWall
-✓ Country Blocking: RU, CN, KP (blacklist)
-✓ VPN/Proxy Detection: Enabled
-✓ Rate Limiting: 10 requests/min, 60 min ban
-✓ Block Bad Bots: Enabled
-✓ Enable Stats Logging: Enabled
-✓ Allowed User-Agents: Googlebot, Bingbot (default)
-✓ Allowed ASNs: 15169 (Google), 8075 (Microsoft)
+ Enable WireWall
+ Country Blocking: [select based on your threat profile]
+ VPN/Proxy Detection: Enabled
+ Rate Limiting: 10 requests/min, 60 min ban
+ Block Bad Bots: Enabled
+ Enable Stats Logging: Enabled
+ Allowed User-Agents: Googlebot, Bingbot (default)
+ Allowed ASNs: 15169 (Google), 8075 (Microsoft)
 ```
 
 See [INSTALL.md](INSTALL.md) for detailed installation and [CONFIGURATIONS.md](CONFIGURATIONS.md) for advanced setups.
 
 ---
 
-## 🎯 Common Use Cases
+## Common Use Cases
 
 ### 1. Attack Protection (Recommended)
 ```
-Country Blocking: RU, CN, KP, IR, BY (blacklist)
+Country Blocking: [select based on your threat profile]
 City Blocking: Philadelphia, Beijing (blacklist - adjust for your threat profile)
 VPN/Proxy Detection: Enabled
 Datacenter Blocking: Enabled
 Rate Limiting: 10 req/min, 60 min ban
 Bot Blocking: Bad bots + AI bots enabled
 Fake Browser Detection: Enabled
-Allowed Bots: Googlebot, Bingbot, Yandex (for SEO)
+Allowed Bots: Googlebot, Bingbot (for SEO)
 Allowed ASNs: 15169 (Google), 8075 (Microsoft)
 ```
 
@@ -172,7 +172,7 @@ Allowed Bots: Googlebot, Bingbot ONLY (for SEO, not AI)
 
 ---
 
-## 🌐 MaxMind GeoLite2 Setup
+## MaxMind GeoLite2 Setup
 
 WireWall works with or without MaxMind, but MaxMind is **strongly recommended** for production use.
 
@@ -180,12 +180,12 @@ WireWall works with or without MaxMind, but MaxMind is **strongly recommended** 
 
 | Feature | With MaxMind | Without MaxMind |
 |---------|-------------|-----------------|
-| **Speed** | ⚡ 0.5-2ms | ⏱️ 100-500ms (HTTP API) |
-| **Reliability** | ✅ No rate limits | ⚠️ Rate limited |
-| **City/Region** | ✅ Full support | ❌ Not available |
-| **Subdivision Blocking** | ✅ Supported | ❌ Not available |
-| **Offline Operation** | ✅ Works offline | ❌ Requires internet |
-| **Accuracy** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
+| **Speed** |  0.5-2ms | ️ 100-500ms (HTTP API) |
+| **Reliability** |  No rate limits | ️ Rate limited |
+| **City/Region** |  Full support |  Not available |
+| **Subdivision Blocking** |  Supported |  Not available |
+| **Offline Operation** |  Works offline |  Requires internet |
+| **Accuracy** | 5/5 | 3/5 |
 
 ### Installation (Recommended)
 
@@ -199,16 +199,16 @@ https://www.maxmind.com/en/geolite2/signup
 - GeoLite2-City.mmdb (optional for city/subdivision blocking)
 
 # 3. Create directory and copy databases
-mkdir -p /path/to/site/modules/WireWall/geoip/
-cp *.mmdb /path/to/site/modules/WireWall/geoip/
+mkdir -p /path/to/site/assets/WireWall/geoip/
+cp *.mmdb /path/to/site/assets/WireWall/geoip/
 
-# 4. Install PHP library (in module directory)
-cd /path/to/site/modules/WireWall
+# 4. Install PHP library (in data directory)
+cd /path/to/site/assets/WireWall
 composer require geoip2/geoip2
 
 # 5. Verify in admin
 Admin → Modules → WireWall → Configure
-✅ MaxMind GeoLite2 Status: Active
+ MaxMind GeoLite2 Status: Active
 ```
 
 ### Database Update Schedule
@@ -218,12 +218,12 @@ MaxMind releases updated databases every **Tuesday and Friday**. For best accura
 ```bash
 # Download latest databases weekly
 # Set up cron job to auto-update (optional)
-0 2 * * 2,5 cd /path/to/site/modules/WireWall/geoip/ && ./update-maxmind.sh
+0 2 * * 2,5 cd /path/to/site/assets/WireWall/geoip/ && ./update-maxmind.sh
 ```
 
 ---
 
-## 🔧 Exception System
+## Exception System
 
 WireWall includes a comprehensive exception system for whitelisting legitimate traffic.
 
@@ -235,7 +235,6 @@ Whitelist legitimate bots to bypass ALL WireWall checks:
 ```
 Googlebot
 Bingbot
-Yandex
 facebookexternalhit
 Slackbot
 LinkedInBot
@@ -264,9 +263,6 @@ Whitelist specific IPs or CIDR ranges:
 # Bing Bot IPs
 157.55.39.0/24
 
-# Yandex Bot IPs
-77.88.5.0/24
-
 # Single IP
 192.168.1.100
 
@@ -287,8 +283,6 @@ Whitelist entire networks by ASN - the most powerful exception method:
 # Search Engines
 AS15169 or 15169 - Google
 AS8075 or 8075 - Microsoft (Bing)
-AS13238 or 13238 - Yandex
-
 # Social Networks
 AS32934 or 32934 - Facebook/Meta
 
@@ -316,10 +310,14 @@ Automatic AJAX bypass for ProcessWire modules:
 Feature: allowTrustedModules (enabled by default)
 Bypasses: ProcessWire module AJAX requests (RockFrontend, AppApi, etc.)
 Benefits: No module conflicts, seamless operation
-Supports: All HTTP methods (GET, POST, PUT, DELETE, PATCH)
+Supports: POST AJAX + all HTTP methods on /api/, /rest/ paths
 ```
 
 Trusted modules automatically bypass WireWall checks, ensuring smooth ProcessWire operation.
+
+**Disable AJAX Protection Completely:**
+
+For cases where AJAX issues persist and cannot be resolved via trusted paths, there is a separate option "Disable AJAX Protection Completely" — it bypasses WireWall for **all** AJAX requests (POST with `X-Requested-With` header), regardless of origin. Use with caution.
 
 ### Custom API Paths
 
@@ -349,7 +347,7 @@ Use Cases: External webhooks, API endpoints, third-party integrations
 
 ---
 
-## 📊 Logging & Monitoring
+## Logging & Monitoring
 
 ### Log Format
 
@@ -357,20 +355,24 @@ WireWall creates a single log file with all security events.
 
 **With City Database:**
 ```
-BLOCKED | US (Chicago, Illinois) | 174.198.11.141 | AS6167 CELLCO-PART | UA: Mozilla/5.0... | subdivision-blocked
-ALLOWED | US (Philadelphia, Pennsylvania) | 1.2.3.4 | AS7922 Comcast Cable | UA: Mozilla/5.0...
-BLOCKED | AU (Sydney, New South Wales) | 1.1.1.1 | AS13335 Cloudflare | UA: curl/7.68.0 | city-blocked
-BLOCKED | RU (Moscow, Moscow) | 5.18.123.45 | AS12389 Rostelecom | UA: python-requests/2.28.0 | country-blocked
-ALLOWED | US | 66.249.66.1 | AS15169 Google | UA: Mozilla/5.0 (compatible; Googlebot/2.1) | allowed-bot
+BLOCKED | US (Chicago, Illinois) | 174.198.11.141 | AS6167 CELLCO-PART | UA: Mozilla/5.0 (Windows NT 10.0; Win64; x64)... | subdivision-blocked
+ALLOWED | US (Philadelphia, Pennsylvania) | 1.2.3.4 | AS7922 Comcast Cable | UA: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)...
+BLOCKED | AU (Sydney, New South Wales) | 203.0.113.5 | AS1221 Telstra | UA: curl/7.68.0 | city-blocked
+ALLOWED | US | 66.249.66.1 | AS15169 Google | UA: Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html) | allowed-bot
+BLOCKED | DE | 185.220.101.1 | AS24940 Hetzner | UA: python-requests/2.28.0 | rate-limit
 ```
 
 **Without City Database:**
 ```
-BLOCKED | DE | 185.220.101.1 | AS13335 Cloudflare | UA: Tor Browser | country-blocked
-ALLOWED | AU | 1.1.1.1 | AS13335 Cloudflare | UA: Mozilla/5.0...
-BLOCKED | CN | 119.23.45.67 | AS4134 Chinanet | UA: curl/7.68.0 | vpn-detected
-ALLOWED | US | 66.249.66.1 | AS15169 Google | UA: Mozilla/5.0 (compatible; Googlebot/2.1) | allowed-bot
+BLOCKED | DE | 185.220.101.1 | AS24940 Hetzner | UA: python-requests/2.28.0 | country-blocked
+ALLOWED | AU | 1.1.1.1 | AS13335 Cloudflare | UA: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)...
+ALLOWED | US | 66.249.66.1 | AS15169 Google | UA: Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html) | allowed-bot
+BLOCKED | Unknown | 10.20.30.40 | UA: curl/7.68.0 | global
 ```
+
+**Log field order:** `STATUS | country [+(city, region)] | ip | [asn] | UA: user-agent | [reason]`
+
+ASN field is omitted if not available. Reason field is omitted for allowed requests (except `allowed-bot`). UA is truncated to 100 characters.
 
 ### Log File Location
 
@@ -401,7 +403,7 @@ Admin → Setup → Logs → wirewall
 
 ---
 
-## 🔧 Cache Management
+## Cache Management
 
 Built-in cache management UI with real-time statistics:
 
@@ -431,31 +433,32 @@ Admin → Modules → WireWall → Configure → Cache Management
 
 ---
 
-## 🔒 Priority System
+## Priority System
 
 WireWall evaluates requests in this order (higher priority = checked first):
 
 1. **Admin Area Protection** → ALLOW (always, never blocked)
 2. **Trusted ProcessWire Modules** → ALLOW (AJAX requests bypass all checks)
-3. **IP Whitelist** → ALLOW (bypasses all rules)
-4. **Allowed Bots/IPs/ASNs** → ALLOW (exceptions bypass all checks)
-5. **Rate Limiting** → BLOCK if exceeded
-6. **IP Blacklist** → BLOCK (always)
-7. **JS Challenge** → CHALLENGE if suspicious
-8. **VPN/Proxy/Tor Detection** → BLOCK if detected
-9. **Datacenter Detection** → BLOCK if datacenter
-10. **ASN Blocking** → BLOCK if ASN matched
-11. **Global Rules** → BLOCK if bot/path/UA/referer matched
-12. **Country Blocking** → BLOCK/ALLOW based on blacklist/whitelist
-13. **City Blocking** → BLOCK/ALLOW based on blacklist/whitelist
-14. **Subdivision Blocking** → BLOCK/ALLOW based on blacklist/whitelist
-15. **Country Rules** → BLOCK if country-specific rule matched
+3. **Logged-in Users** → ALLOW (authenticated ProcessWire users always bypass all checks)
+4. **IP Whitelist** → ALLOW (bypasses all rules)
+5. **Allowed Bots/IPs/ASNs** → ALLOW (exceptions bypass all checks)
+6. **Rate Limiting** → BLOCK if exceeded
+7. **IP Blacklist** → BLOCK (always)
+8. **JS Challenge** → CHALLENGE if suspicious
+9. **VPN/Proxy/Tor Detection** → BLOCK if detected
+10. **Datacenter Detection** → BLOCK if datacenter
+11. **ASN Blocking** → BLOCK if ASN matched
+12. **Global Rules** → BLOCK if bot/path/UA/referer matched
+13. **Country Blocking** → BLOCK/ALLOW based on blacklist/whitelist
+14. **City Blocking** → BLOCK/ALLOW based on blacklist/whitelist
+15. **Subdivision Blocking** → BLOCK/ALLOW based on blacklist/whitelist
+16. **Country Rules** → BLOCK if country-specific rule matched
 
 **Access ALLOWED** if none of the above rules trigger.
 
 ---
 
-## 🤖 Bot Detection Categories
+## Bot Detection Categories
 
 ### Bad Bots (Malicious)
 ```
@@ -465,10 +468,10 @@ semrush, ahrefs, majestic, dotbot, mj12bot, ahrefsbot
 
 ### Search Engine Bots (SEO)
 ```
-Googlebot, Bingbot, Slurp (Yahoo), Yandex, Baidu
-DuckDuckBot, Sogou, Exabot
+Googlebot, Bingbot, Slurp (Yahoo), DuckDuckBot
+Baidu, Sogou, Exabot
 ```
-⚠️ **Warning:** Blocking search bots prevents indexing! Use exception system to allow them.
+️ **Warning:** Blocking search bots prevents indexing! Use exception system to allow them.
 
 ### AI Training Bots (Content Protection)
 ```
@@ -495,7 +498,7 @@ AnnoyingCrawler
 
 ---
 
-## 🎨 Block Page Customization
+## Block Page Customization
 
 ### Default Block Page
 - Modern, professional design
@@ -510,9 +513,10 @@ AnnoyingCrawler
 **1. Silent 404 Mode (Stealth)**
 ```
 Block Action: Return 404 silently
-- No block page shown
-- Looks like page doesn't exist
-- Frustrates attackers
+- Returns plain text "Not Found", no HTML
+- No WireWall branding or fingerprint
+- Indistinguishable from a missing page
+- Frustrates and confuses attackers
 ```
 
 **2. Custom Redirect**
@@ -526,7 +530,7 @@ Redirect URL: https://example.com/blocked
 
 ---
 
-## ⚡ Performance Benchmarks
+## Performance Benchmarks
 
 ### With MaxMind GeoLite2
 ```
@@ -564,7 +568,7 @@ Total Exception:     <1ms (complete bypass)
 
 ---
 
-## 🔍 Troubleshooting
+## Troubleshooting
 
 ### Issue: Admin Area Blocked
 ```
@@ -589,7 +593,7 @@ If you can't access admin:
 
 ### Issue: Search Engines Blocked
 ```
-1. Add to Allowed User-Agents: Googlebot, Bingbot, Yandex
+1. Add to Allowed User-Agents: Googlebot, Bingbot
 2. Add to Allowed ASNs: 15169 (Google), 8075 (Microsoft)
 3. Add to Allowed IPs: Verified search engine IPs
 4. Verify with: /admin/setup/logs → wirewall
@@ -609,8 +613,8 @@ If you can't access admin:
 
 ### Issue: MaxMind Not Working
 ```
-1. Verify databases in /site/modules/WireWall/geoip/
-2. Check composer installation: composer require geoip2/geoip2
+1. Verify databases in /site/assets/WireWall/geoip/
+2. Check composer installation: cd /site/assets/WireWall && composer require geoip2/geoip2
 3. Verify file permissions (readable by PHP)
 4. Check module config: MaxMind Status indicator
 5. Ensure correct file names (case-sensitive)
@@ -636,59 +640,61 @@ If you can't access admin:
 
 ---
 
-## 🔐 Security Best Practices
+## Security Best Practices
 
 ### Recommended Configuration
 ```
-✓ Enable Rate Limiting (10-15 req/min)
-✓ Enable VPN/Proxy Detection
-✓ Enable Datacenter Blocking (unless you need CDNs)
-✓ Block Bad Bots + AI Bots
-✓ Enable Fake Browser Detection
-✓ Enable Stats Logging
-✓ Whitelist your office/home IP
-✓ Whitelist legitimate bots (Googlebot, Bingbot)
-✓ Whitelist trusted ASNs (Google, Microsoft for SEO)
-✓ Regular log review
+ Enable Rate Limiting (10-15 req/min)
+ Enable VPN/Proxy Detection
+ Enable Datacenter Blocking (unless you need CDNs)
+ Block Bad Bots + AI Bots
+ Enable Fake Browser Detection
+ Enable Stats Logging
+ Whitelist your office/home IP
+ Whitelist legitimate bots (Googlebot, Bingbot)
+ Whitelist trusted ASNs (Google, Microsoft for SEO)
+ Regular log review
 ```
 
 ### Exception System Best Practices
 ```
-✓ Always whitelist search engines: Googlebot, Bingbot, Yandex
-✓ Use ASN whitelisting for major services: Google (15169), Microsoft (8075)
-✓ Verify bot IPs: Use official verification methods
-✓ Monitor exceptions: Check logs for allowed bot activity
-✓ Keep trusted modules enabled: Prevents ProcessWire conflicts
-✓ Document exceptions: Note why each exception exists
-✓ Review periodically: Remove unnecessary exceptions
+ Always whitelist search engines: Googlebot, Bingbot
+ Use ASN whitelisting for major services: Google (15169), Microsoft (8075)
+ Verify bot IPs: Use official verification methods
+ Monitor exceptions: Check logs for allowed bot activity
+ Keep trusted modules enabled: Prevents ProcessWire conflicts
+ Document exceptions: Note why each exception exists
+ Review periodically: Remove unnecessary exceptions
 ```
 
 ### What WireWall Does NOT Replace
-- ✗ Regular ProcessWire/PHP updates
-- ✗ Strong passwords and 2FA
-- ✗ HTTPS/SSL certificates
-- ✗ Server hardening (firewall, SSH, etc.)
-- ✗ Regular backups
-- ✗ DDoS protection at network level
-- ✗ Application-level security (SQL injection, XSS)
+-  Regular ProcessWire/PHP updates
+-  Strong passwords and 2FA
+-  HTTPS/SSL certificates
+-  Server hardening (firewall, SSH, etc.)
+-  Regular backups
+-  DDoS protection at network level
+-  Application-level security (SQL injection, XSS)
 
 **Use WireWall as part of a comprehensive security strategy.**
 
 ---
 
-## 📁 File Structure
+## File Structure
 
 ```
-WireWall/
+/site/modules/WireWall/
 ├── WireWall.module.php          # Main module
 ├── README.md                    # This file
 ├── INSTALL.md                   # Installation guide
 ├── CONFIGURATIONS.md            # Configuration examples
-├── LICENSE                      # License
-├── geoip/                       # MaxMind databases (create this)
+└── LICENSE                      # License
+
+/site/assets/WireWall/           # Persistent data (survives module updates)
+├── geoip/                       # MaxMind databases
 │   ├── GeoLite2-Country.mmdb
 │   ├── GeoLite2-ASN.mmdb
-│   └── GeoLite2-City.mmdb
+│   └── GeoLite2-City.mmdb       # optional
 ├── vendor/                      # Composer dependencies
 │   └── geoip2/                  # MaxMind GeoIP2 library
 └── composer.json                # Composer config
@@ -696,7 +702,7 @@ WireWall/
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Contributions, issues, and feature requests are welcome!
 
@@ -706,26 +712,17 @@ Contributions, issues, and feature requests are welcome!
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
+See [CHANGELOG.md](CHANGELOG.md) for version history.
+
 ---
 
-## 📜 License
+## License
 
 This module is provided as-is under the MIT License. See [LICENSE](LICENSE) file for details.
 
 ---
 
-## 🙏 Credits & Acknowledgements
-
-- **MaxMind** - GeoLite2 free databases ([MaxMind.com](https://www.maxmind.com))
-- **ProcessWire** - Exceptional CMS platform ([ProcessWire.com](https://processwire.com))
-- **Community** - Testing, feedback, and support
-- **ip-api.com** - Free GeoIP API fallback
-- **ipinfo.io** - VPN/Proxy detection API
-- **ipapi.co** - Alternative detection API
-
----
-
-## 💡 Tips & Tricks
+## Tips & Tricks
 
 ### Whitelist Your Development IPs
 ```
@@ -790,10 +787,11 @@ E-commerce Sites:
 ```
 Most Efficient → Least Efficient:
 1. Admin Area (automatic)
-2. IP Whitelist (instant)
-3. ASN Whitelist (fast, covers entire networks)
-4. User-Agent Whitelist (fast, covers bot families)
-5. Country Whitelist (covers entire countries)
+2. Logged-in Users (automatic, session-based)
+3. IP Whitelist (instant)
+4. ASN Whitelist (fast, covers entire networks)
+5. User-Agent Whitelist (fast, covers bot families)
+6. Country Whitelist (covers entire countries)
 
 Best Practice: Use ASN whitelisting for legitimate services
 Example: AS15169 whitelists ALL Google services at once

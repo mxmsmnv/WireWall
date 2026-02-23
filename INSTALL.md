@@ -4,11 +4,11 @@ Complete installation instructions for WireWall security module.
 
 ---
 
-## 📋 Prerequisites
+## Prerequisites
 
 ### Required
 - ProcessWire 3.0.200 or higher
-- PHP 7.4+ (8.0+ recommended)
+- PHP 8.1 or higher
 - Write permissions on `/site/modules/` directory
 - Write permissions on `/site/assets/cache/` directory
 
@@ -19,7 +19,7 @@ Complete installation instructions for WireWall security module.
 
 ---
 
-## 🚀 Method 1: Standard Installation
+## Method 1: Standard Installation
 
 ### Step 1: Download Module
 
@@ -53,16 +53,16 @@ chmod 644 WireWall/WireWall.module.php
 ### Step 4: Initial Configuration
 
 1. Navigate to: `Modules → Configure → WireWall`
-2. Enable module: ☑ **Enable WireWall**
+2. Enable module:  **Enable WireWall**
 3. Set basic options:
    - Rate Limiting: `10 requests / 60 minutes`
    - Block Action: `Beautiful Block Page`
-   - Enable Stats Logging: ☑
+   - Enable Stats Logging: 
 4. Click "Save"
 
 ---
 
-## 🌍 Method 2: Installation with MaxMind (Recommended)
+## Method 2: Installation with MaxMind (Recommended)
 
 MaxMind provides fast, accurate geolocation without external API calls.
 
@@ -83,10 +83,11 @@ MaxMind provides fast, accurate geolocation without external API calls.
 
 ### Step 3: Create geoip Directory
 
+The data directory is stored in `/site/assets/WireWall/` (created automatically on install).
+
 ```bash
-cd /path/to/processwire/site/modules/WireWall/
-mkdir geoip
-chmod 755 geoip
+mkdir -p /path/to/processwire/site/assets/WireWall/geoip
+chmod 755 /path/to/processwire/site/assets/WireWall/geoip
 ```
 
 ### Step 4: Place Databases
@@ -102,8 +103,8 @@ tar -xvf GeoLite2-Country.tar
 tar -xvf GeoLite2-ASN.tar
 tar -xvf GeoLite2-City.tar  # if using
 
-# Copy .mmdb files to module
-cd /path/to/processwire/site/modules/WireWall/geoip/
+# Copy .mmdb files to assets directory
+cd /path/to/processwire/site/assets/WireWall/geoip/
 cp /path/to/downloads/GeoLite2-Country_*/GeoLite2-Country.mmdb .
 cp /path/to/downloads/GeoLite2-ASN_*/GeoLite2-ASN.mmdb .
 cp /path/to/downloads/GeoLite2-City_*/GeoLite2-City.mmdb .  # if using
@@ -112,7 +113,7 @@ cp /path/to/downloads/GeoLite2-City_*/GeoLite2-City.mmdb .  # if using
 ### Step 5: Install PHP Library
 
 ```bash
-cd /path/to/processwire/site/modules/WireWall/
+cd /path/to/processwire/site/assets/WireWall/
 composer require geoip2/geoip2
 ```
 
@@ -129,37 +130,43 @@ php composer.phar require geoip2/geoip2
 2. Look for "MaxMind GeoLite2 Status" section
 3. Should show:
    ```
-   ✅ MaxMind GeoLite2 databases are installed and active
+    MaxMind GeoLite2 databases are installed and active
    
-   Country Database: GeoLite2-Country.mmdb (6.84 MB) ✅
-   ASN Database: GeoLite2-ASN.mmdb (5.21 MB) ✅
-   City Database: GeoLite2-City.mmdb (70.5 MB) ✅
+   Country Database: GeoLite2-Country.mmdb (6.84 MB) 
+   ASN Database: GeoLite2-ASN.mmdb (5.21 MB) 
+   City Database: GeoLite2-City.mmdb (70.5 MB) 
    Status: Active - Using MaxMind for all GeoIP lookups
    ```
 
 ---
 
-## 🔧 Directory Structure
+## Directory Structure
 
-After installation, your directory should look like:
+After installation, your directories should look like:
 
 ```
 /site/modules/WireWall/
 ├── WireWall.module.php          (Main module file)
 ├── README.md                    (Documentation)
 ├── INSTALL.md                   (This file)
-├── CONFIGURATIONS.md            (Configuration examples)
+└── CONFIGURATIONS.md            (Configuration examples)
+
+/site/assets/WireWall/           (Persistent data — NOT deleted on module updates)
 ├── geoip/                       (MaxMind databases)
 │   ├── GeoLite2-Country.mmdb
 │   ├── GeoLite2-ASN.mmdb
 │   └── GeoLite2-City.mmdb       (optional)
-└── vendor/                      (Composer dependencies)
-    └── geoip2/                  (MaxMind library)
+├── vendor/                      (Composer dependencies)
+│   └── geoip2/                  (MaxMind library)
+├── composer.json
+└── composer.lock
 ```
+
+> **Important:** MaxMind databases and Composer dependencies are stored in `/site/assets/WireWall/` — outside the module folder. This means they survive module updates via git pull or admin upgrades.
 
 ---
 
-## 📊 Cache Directory
+## Cache Directory
 
 WireWall will automatically create cache directory:
 
@@ -175,7 +182,7 @@ Permissions: `755` (directory), `644` (files)
 
 ---
 
-## ✅ Verification Checklist
+## Verification Checklist
 
 After installation, verify:
 
@@ -189,7 +196,7 @@ After installation, verify:
 
 ---
 
-## 🧪 Testing Installation
+## Testing Installation
 
 ### Test 1: Basic Functionality
 
@@ -215,7 +222,7 @@ After installation, verify:
 
 ---
 
-## 🔄 Updating
+## Updating
 
 ### Update Module Files
 
@@ -233,7 +240,7 @@ MaxMind updates databases monthly. To update:
 ```bash
 # 1. Download new databases from MaxMind
 # 2. Replace old files
-cd /path/to/processwire/site/modules/WireWall/geoip/
+cd /path/to/processwire/site/assets/WireWall/geoip/
 rm -f *.mmdb
 cp /path/to/new/GeoLite2-Country.mmdb .
 cp /path/to/new/GeoLite2-ASN.mmdb .
@@ -246,7 +253,7 @@ Admin → Modules → WireWall → Configure
 
 ---
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Problem: Module doesn't appear in Modules list
 
@@ -265,15 +272,15 @@ Admin → Modules → Refresh
 **Solution:**
 ```bash
 # Check databases exist
-ls -lh /path/to/site/modules/WireWall/geoip/
+ls -lh /path/to/site/assets/WireWall/geoip/
 # Should show: GeoLite2-Country.mmdb, GeoLite2-ASN.mmdb
 
 # Check composer dependencies
-ls -lh /path/to/site/modules/WireWall/vendor/
+ls -lh /path/to/site/assets/WireWall/vendor/
 # Should show: geoip2/
 
 # If missing, install:
-cd /path/to/site/modules/WireWall/
+cd /path/to/site/assets/WireWall/
 composer require geoip2/geoip2
 ```
 
@@ -309,7 +316,7 @@ chmod 755 /path/to/site/assets/cache
 
 ---
 
-## 🔐 Security Recommendations
+## Security Recommendations
 
 After installation:
 
@@ -321,7 +328,7 @@ After installation:
 
 ---
 
-## 📚 Next Steps
+## Next Steps
 
 After installation:
 
@@ -332,8 +339,10 @@ After installation:
 5. Test with different scenarios
 6. Monitor logs for first 24 hours
 
+See [CHANGELOG.md](CHANGELOG.md) for version history and release notes.
+
 ---
 
-**Installation complete! 🎉**
+**Installation complete.**
 
 Proceed to [CONFIGURATIONS.md](CONFIGURATIONS.md) for configuration examples.

@@ -1,7 +1,7 @@
 <?php namespace ProcessWire;
 
 /**
- * WireWall 1.3.2 - Advanced Traffic Firewall
+ * WireWall 1.3.4 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -13,9 +13,9 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.3.2
+ * @version 1.3.4
  * @author Maxim Alex
- * @date January 3, 2026
+ * @date February 23, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
  */
 
@@ -25,7 +25,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 132,
+            'version' => 134,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -152,7 +152,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             'subdivision_blocking_enabled', 'block_proxy_vpn_tor', 
             'block_datacenters', 'js_challenge_enabled', 'rate_limit_enabled',
             'block_bad_bots', 'block_search_bots', 'block_ai_bots', 
-            'block_other_bots', 'enable_stats_logging'
+            'block_other_bots', 'enable_stats_logging', 'disable_ajax_protection'
         ];
         
         foreach ($checkboxFields as $field) {
@@ -211,7 +211,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             'subdivision_blocking_enabled', 'block_proxy_vpn_tor', 
             'block_datacenters', 'js_challenge_enabled', 'rate_limit_enabled',
             'block_bad_bots', 'block_search_bots', 'block_ai_bots', 
-            'block_other_bots', 'enable_stats_logging'
+            'block_other_bots', 'enable_stats_logging', 'disable_ajax_protection'
         ];
         
         foreach ($checkboxFields as $field) {
@@ -326,8 +326,8 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         if ($config->cli) return;
         
         // === PRIORITY 0.5: ALLOW TRUSTED PROCESSWIRE MODULE AJAX REQUESTS ===
-        // Check before any other security checks
-        if ($this->allowTrustedModules && $this->isAllowedModuleRequest()) {
+        // Check before any other security checks (unless AJAX protection is disabled)
+        if (!$this->disable_ajax_protection && $this->allowTrustedModules && $this->isAllowedModuleRequest()) {
             return; // Allow trusted module AJAX - no logging, no blocking
         }
         
@@ -335,6 +335,12 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
         $path = $page ? $page->url : parse_url($requestUri, PHP_URL_PATH);
         $referer = $_SERVER['HTTP_REFERER'] ?? '';
+        
+        // === PRIORITY 0.7: NEVER BLOCK LOGGED-IN PROCESSWIRE USERS ===
+        // This check requires $ip to be resolved first (for accurate logging if enabled)
+        if ($this->wire('user') && $this->wire('user')->isLoggedin()) {
+            return; // Logged-in users always bypass all WireWall checks
+        }
         
         // === PRIORITY 1: IP WHITELIST (ALWAYS ALLOW) ===
         if ($this->isIPWhitelisted($ip)) {
@@ -461,6 +467,9 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             // Ban for specified minutes
             $banTime = $this->rate_limit_minutes * 60;
             $this->cacheSet($banKey, true, $banTime);
+            // IMPORTANT: Delete the rate limit counter so that after the ban expires
+            // the first request doesn't immediately re-trigger a new ban.
+            @unlink($this->getCachePath($cacheKey));
             return true;
         }
         
@@ -1054,13 +1063,25 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             $hasAcceptEncoding = !empty($_SERVER['HTTP_ACCEPT_ENCODING']);
             $hasAccept = !empty($_SERVER['HTTP_ACCEPT']);
             
-            // Missing critical browser headers = FAKE
-            if (!$hasAcceptLanguage || !$hasAcceptEncoding || !$hasAccept) {
-                return true;
+            // Check if it's Firefox
+            $isFirefox = (stripos($userAgent, 'Firefox') !== false && stripos($userAgent, 'Chrome') === false);
+            
+            // Missing critical browser headers = FAKE (but be lenient with Firefox)
+            if (!$isFirefox) {
+                // Strict check for Chrome, Edge, Safari
+                if (!$hasAcceptLanguage || !$hasAcceptEncoding || !$hasAccept) {
+                    return true;
+                }
+            } else {
+                // Lenient check for Firefox (only Accept is required)
+                if (!$hasAccept) {
+                    return true;
+                }
             }
             
             // Suspicious Accept header (wget/curl send only */*)
-            if ($hasAccept && $_SERVER['HTTP_ACCEPT'] === '*/*') {
+            // Skip this check for Firefox (privacy extensions may modify Accept)
+            if (!$isFirefox && $hasAccept && $_SERVER['HTTP_ACCEPT'] === '*/*') {
                 return true;
             }
             
@@ -1848,178 +1869,11 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             exit;
         }
         
-        // Silent 404 mode
+        // Silent 404 mode - truly stealthy, no HTML, no WireWall branding
         if ($this->block_action === 'silent_404') {
             http_response_code(404);
-            echo "<!DOCTYPE html>
-<html>
-<head>
-    <meta charset='utf-8'>
-    <meta name='viewport' content='width=device-width, initial-scale=1'>
-    <title>404 Not Found - WireWall</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-        
-        body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: #000000;
-            color: #ffffff;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            padding: 20px;
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .wave-pattern {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            opacity: 0.03;
-            pointer-events: none;
-        }
-        
-        .wave-line {
-            position: absolute;
-            left: 0;
-            right: 0;
-            height: 2px;
-            background: white;
-            transform-origin: center;
-        }
-        
-        .wave-line:nth-child(1) { top: 10%; transform: scaleX(0.8); }
-        .wave-line:nth-child(2) { top: 15%; transform: scaleX(0.85); }
-        .wave-line:nth-child(3) { top: 20%; transform: scaleX(0.9); }
-        .wave-line:nth-child(4) { top: 25%; transform: scaleX(0.95); }
-        .wave-line:nth-child(5) { top: 30%; transform: scaleX(1); }
-        .wave-line:nth-child(6) { top: 35%; transform: scaleX(0.95); }
-        .wave-line:nth-child(7) { top: 40%; transform: scaleX(0.9); }
-        .wave-line:nth-child(8) { top: 45%; transform: scaleX(0.85); }
-        .wave-line:nth-child(9) { top: 50%; transform: scaleX(0.8); }
-        .wave-line:nth-child(10) { top: 55%; transform: scaleX(0.85); }
-        .wave-line:nth-child(11) { top: 60%; transform: scaleX(0.9); }
-        .wave-line:nth-child(12) { top: 65%; transform: scaleX(0.95); }
-        .wave-line:nth-child(13) { top: 70%; transform: scaleX(1); }
-        .wave-line:nth-child(14) { top: 75%; transform: scaleX(0.95); }
-        .wave-line:nth-child(15) { top: 80%; transform: scaleX(0.9); }
-        
-        .container {
-            position: relative;
-            max-width: 600px;
-            width: 100%;
-            z-index: 10;
-            text-align: center;
-        }
-        
-        .accent-line {
-            width: 60px;
-            height: 4px;
-            background: #DC2626;
-            margin: 0 auto 40px;
-        }
-        
-        .error-code {
-            font-size: 120px;
-            font-weight: 700;
-            line-height: 1;
-            color: #ffffff;
-            letter-spacing: -0.02em;
-            margin-bottom: 24px;
-        }
-        
-        h1 {
-            font-size: 32px;
-            font-weight: 600;
-            color: #ffffff;
-            margin-bottom: 16px;
-            letter-spacing: -0.01em;
-        }
-        
-        .subtitle {
-            font-size: 16px;
-            color: rgba(255, 255, 255, 0.6);
-            line-height: 1.6;
-            margin-bottom: 48px;
-            max-width: 480px;
-            margin-left: auto;
-            margin-right: auto;
-        }
-        
-        .footer {
-            padding-top: 48px;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
-        }
-        
-        .footer-logo {
-            font-size: 12px;
-            font-weight: 600;
-            letter-spacing: 0.15em;
-            color: rgba(255, 255, 255, 0.3);
-            margin-bottom: 6px;
-        }
-        
-        .footer-text {
-            font-size: 11px;
-            color: rgba(255, 255, 255, 0.25);
-            letter-spacing: 0.05em;
-        }
-        
-        @media (max-width: 600px) {
-            .error-code {
-                font-size: 80px;
-            }
-            
-            h1 {
-                font-size: 24px;
-            }
-        }
-    </style>
-</head>
-<body>
-    <div class='wave-pattern'>
-        <div class='wave-line'></div>
-        <div class='wave-line'></div>
-        <div class='wave-line'></div>
-        <div class='wave-line'></div>
-        <div class='wave-line'></div>
-        <div class='wave-line'></div>
-        <div class='wave-line'></div>
-        <div class='wave-line'></div>
-        <div class='wave-line'></div>
-        <div class='wave-line'></div>
-        <div class='wave-line'></div>
-        <div class='wave-line'></div>
-        <div class='wave-line'></div>
-        <div class='wave-line'></div>
-        <div class='wave-line'></div>
-    </div>
-
-    <div class='container'>
-        <div class='accent-line'></div>
-        
-        <div class='error-code'>404</div>
-        
-        <h1>Page Not Found</h1>
-        
-        <p class='subtitle'>
-            The requested resource could not be located on this server. 
-            Please verify the URL or return to the homepage.
-        </p>
-        
-        <div class='footer'>
-            <div class='footer-logo'>WIREWALL</div>
-            <div class='footer-text'>SECURE ACCESS CONTROL SYSTEM</div>
-        </div>
-    </div>
-</body>
-</html>";
+            header('Content-Type: text/plain; charset=utf-8');
+            echo "Not Found";
             exit;
         }
         
@@ -2392,6 +2246,16 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f->notes = 'Recommended: Keep this enabled to allow ProcessWire modules to function properly. Disabling this may break AJAX functionality in your modules.';
         $f->icon = 'check-circle';
         $f->checked = (!isset($data['allowTrustedModules']) || $data['allowTrustedModules']) ? 'checked' : '';
+        $inputfields->add($f);
+        
+        // === DISABLE AJAX PROTECTION ===
+        $f = $modules->get('InputfieldCheckbox');
+        $f->name = 'disable_ajax_protection';
+        $f->label = 'Disable AJAX Protection Completely';
+        $f->description = 'Allow ALL AJAX requests to bypass WireWall checks, regardless of origin';
+        $f->notes = '⚠️ Use only if you have issues with AJAX on your site that cannot be resolved via trusted paths above. All AJAX requests (POST with X-Requested-With header) will bypass WireWall.';
+        $f->icon = 'warning';
+        $f->checked = isset($data['disable_ajax_protection']) && $data['disable_ajax_protection'] ? 'checked' : '';
         $inputfields->add($f);
         
         // Custom Trusted Paths
@@ -3265,7 +3129,7 @@ MaxMind GeoLite2 ASN database required for this feature.';
         $f->label = 'Action for Blocked Visitors';
         $f->addOption('show_page', 'Show beautiful block page');
         $f->addOption('redirect', 'Redirect to URL');
-        $f->addOption('silent_404', 'Return 404 silently (stealth mode)');
+        $f->addOption('silent_404', 'Return 404 silently (stealth mode) — plain "Not Found", no HTML, no WireWall branding');
         $f->value = $data['block_action'] ?? 'show_page';
         $fieldset->add($f);
         

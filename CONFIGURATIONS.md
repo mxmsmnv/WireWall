@@ -4,26 +4,26 @@ Practical configuration examples for common security scenarios. 19 ready-to-use 
 
 ---
 
-## 🎯 Basic Configurations
+## Basic Configurations
 
 ### 1. Blog/News Site
 
 **Goal:** Protect from comment spam and DDoS
 
 ```
-Enable WireWall: ☑
+Enable WireWall: 
 
 Rate Limiting:
-  ☑ Enable Rate Limiting
+   Enable Rate Limiting
   Requests: 20
   Minutes: 60
   Ban Minutes: 30
 
 VPN/Proxy Detection:
-  ☑ Block VPN/Proxy/Tor
+   Block VPN/Proxy/Tor
   
 Block Action: Beautiful Block Page
-Enable Stats Logging: ☑
+Enable Stats Logging: 
 ```
 
 **Result:** Legitimate readers unaffected, bots blocked.
@@ -35,7 +35,7 @@ Enable Stats Logging: ☑
 **Goal:** Prevent fraud and bot scraping
 
 ```
-Enable WireWall: ☑
+Enable WireWall: 
 
 Country Blocking:
   Mode: Blacklist
@@ -47,14 +47,14 @@ Rate Limiting:
   Ban Minutes: 60
 
 VPN/Proxy Detection:
-  ☑ Block VPN/Proxy/Tor
-  ☑ Block Datacenters
+   Block VPN/Proxy/Tor
+   Block Datacenters
 
 JavaScript Challenge:
-  ☑ Enable JS Challenge
+   Enable JS Challenge
 
 Block Action: Beautiful Block Page
-Enable Stats Logging: ☑
+Enable Stats Logging: 
 ```
 
 **Result:** High security, minimal impact on customers.
@@ -66,7 +66,7 @@ Enable Stats Logging: ☑
 **Goal:** Geo-restrict to specific countries
 
 ```
-Enable WireWall: ☑
+Enable WireWall: 
 
 Country Blocking:
   Mode: Whitelist
@@ -85,7 +85,7 @@ Custom Message: "This website is only accessible from authorized regions."
 
 ---
 
-## 🌍 Geographic Configurations
+## Geographic Configurations
 
 ### 4. Block Attack Sources
 
@@ -97,7 +97,7 @@ Country Blocking:
   Countries: [select based on your logs]
   
 City Blocking:
-  ☑ Enable City Blocking
+   Enable City Blocking
   Mode: Blacklist
   Cities:
     Philadelphia
@@ -107,7 +107,7 @@ City Blocking:
     Mumbai
 
 VPN/Proxy Detection:
-  ☑ Block VPN/Proxy/Tor
+   Block VPN/Proxy/Tor
 ```
 
 **Result:** Targeted blocking of known attack sources.
@@ -124,7 +124,7 @@ Country Blocking:
   Countries: US
 
 City Blocking:
-  ☑ Enable City Blocking
+   Enable City Blocking
   Mode: Whitelist
   Cities:
     Philadelphia, US
@@ -133,7 +133,7 @@ City Blocking:
     Washington, US
 
 Subdivision Blocking:
-  ☑ Enable Subdivision Blocking
+   Enable Subdivision Blocking
   Mode: Whitelist
   Subdivisions:
     Pennsylvania, US
@@ -151,7 +151,7 @@ Subdivision Blocking:
 
 ```
 Subdivision Blocking:
-  ☑ Enable Subdivision Blocking
+   Enable Subdivision Blocking
   Mode: Blacklist
   Subdivisions:
     California, US
@@ -160,7 +160,7 @@ Subdivision Blocking:
     Bavaria, DE
 
 VPN/Proxy Detection:
-  ☑ Block VPN/Proxy/Tor
+   Block VPN/Proxy/Tor
 ```
 
 **Result:** Block entire regions without blocking whole countries.
@@ -180,7 +180,7 @@ VPN/Proxy Detection:
 
 ```
 Subdivision Blocking:
-  ☑ Enable Subdivision Blocking
+   Enable Subdivision Blocking
   Mode: Whitelist
   Subdivisions:
     Pennsylvania, US
@@ -196,14 +196,14 @@ Country Blocking:
 
 ---
 
-## 🛡️ Security-Focused Configurations
+## Security-Focused Configurations
 
 ### 8. Maximum Security
 
 **Goal:** Lockdown against all automated threats
 
 ```
-Enable WireWall: ☑
+Enable WireWall: 
 
 IP Whitelist:
   YOUR.OFFICE.IP.ADDRESS
@@ -215,8 +215,8 @@ Rate Limiting:
   Ban Minutes: 120
 
 VPN/Proxy Detection:
-  ☑ Block VPN/Proxy/Tor
-  ☑ Block Datacenters
+   Block VPN/Proxy/Tor
+   Block Datacenters
 
 ASN Blocking:
   AS16509  (Amazon AWS)
@@ -224,7 +224,7 @@ ASN Blocking:
   AS14061  (DigitalOcean)
 
 JavaScript Challenge:
-  ☑ Enable JS Challenge
+   Enable JS Challenge
 
 Global Rules:
   User-Agent: bot, crawler, scraper, scanner
@@ -233,7 +233,7 @@ Global Rules:
 Block Action: Silent 404
 ```
 
-**Result:** Maximum protection, legitimate users unaffected.
+**Result:** Maximum protection. Logged-in users are always allowed through automatically. Blocked visitors receive a plain 404 with no WireWall fingerprint.
 
 ---
 
@@ -242,7 +242,7 @@ Block Action: Silent 404
 **Goal:** Allow only team members
 
 ```
-Enable WireWall: ☑
+Enable WireWall: 
 
 IP Whitelist:
   OFFICE.IP.1
@@ -284,22 +284,22 @@ Rate Limiting:
   Ban Minutes: 15
 
 VPN/Proxy Detection:
-  ☑ Block VPN/Proxy/Tor
-  ☑ Block Datacenters
+   Block VPN/Proxy/Tor
+   Block Datacenters
 ```
 
 **Result:** API protected from automated abuse.
 
 ---
 
-## ⚡ Performance-Optimized Configurations
+## Performance-Optimized Configurations
 
 ### 11. High-Traffic Site
 
 **Goal:** Protect without impacting performance
 
 ```
-Enable WireWall: ☑
+Enable WireWall: 
 
 Rate Limiting:
   Requests: 30
@@ -307,13 +307,13 @@ Rate Limiting:
   Ban Minutes: 30
 
 VPN/Proxy Detection:
-  ☐ Block VPN/Proxy/Tor  (disabled for performance)
+   Block VPN/Proxy/Tor  (disabled for performance)
 
 JavaScript Challenge:
-  ☐ Enable JS Challenge  (disabled for performance)
+   Enable JS Challenge  (disabled for performance)
 
 Block Action: Silent 404
-Enable Stats Logging: ☐  (disabled for performance)
+Enable Stats Logging:   (disabled for performance)
 ```
 
 **Result:** Minimal overhead, rate limiting only.
@@ -325,7 +325,7 @@ Enable Stats Logging: ☐  (disabled for performance)
 **Goal:** Work with CloudFlare/CDN
 
 ```
-Enable WireWall: ☑
+Enable WireWall: 
 
 (Add in config.php:)
 $config->wireWallTrustProxy = true;
@@ -344,7 +344,7 @@ Country Blocking:
 
 ---
 
-## 🎨 User Experience Configurations
+## User Experience Configurations
 
 ### 13. Friendly Block Page
 
@@ -358,7 +358,7 @@ Custom Block Message:
 If you believe this is an error, please contact 
 support@yoursite.com with your IP address."
 
-Enable Stats Logging: ☑
+Enable Stats Logging: 
 ```
 
 **Result:** Users know how to get help.
@@ -367,7 +367,7 @@ Enable Stats Logging: ☑
 
 ### 14. Silent Blocking
 
-**Goal:** Hide from attackers
+**Goal:** Hide from attackers completely
 
 ```
 Block Action: Silent 404
@@ -377,12 +377,12 @@ Country Blocking:
   Countries: [attack sources]
 
 VPN/Proxy Detection:
-  ☑ Block VPN/Proxy/Tor
+   Block VPN/Proxy/Tor
 
-Enable Stats Logging: ☑
+Enable Stats Logging: 
 ```
 
-**Result:** Attackers see 404, not block page.
+**Result:** Blocked visitors receive a plain-text "Not Found" response — no HTML, no WireWall branding, no fingerprint. Indistinguishable from a genuinely missing page.
 
 ---
 
@@ -402,14 +402,14 @@ Redirect URL: https://yoursite.com/access-restricted
 
 ---
 
-## 🧪 Testing Configurations
+## Testing Configurations
 
 ### 16. Safe Testing
 
 **Goal:** Test WireWall without breaking site
 
 ```
-Enable WireWall: ☑
+Enable WireWall: 
 
 IP Whitelist:
   YOUR.IP.ADDRESS  (CRITICAL!)
@@ -420,19 +420,19 @@ Rate Limiting:
   Ban Minutes: 2
 
 Block Action: Beautiful Block Page
-Enable Stats Logging: ☑
+Enable Stats Logging: 
 ```
 
 **Testing Steps:**
-1. Add your IP to whitelist FIRST
+1. Add your IP to whitelist FIRST (or simply be logged in — logged-in users bypass all checks)
 2. Enable module
-3. Use VPN or mobile to test
+3. Use VPN or mobile to test blocking
 4. Check logs constantly
 5. Remove your IP from whitelist last
 
 ---
 
-## 🔧 Advanced Configurations
+## Advanced Configurations
 
 ### 17. Multi-Layer Defense
 
@@ -451,7 +451,7 @@ Priority Layers:
    KNOWN.ATTACKER.IP
    
 4. VPN/Proxy Detection:
-   ☑ Enabled
+    Enabled
    
 5. Country Blocking:
    Blacklist: [attack sources]
@@ -480,7 +480,7 @@ Priority Layers:
 ```
 (Before Event)
 
-Enable WireWall: ☑
+Enable WireWall: 
 
 Rate Limiting:
   Requests: 5
@@ -488,8 +488,8 @@ Rate Limiting:
   Ban Minutes: 120
 
 VPN/Proxy Detection:
-  ☑ Block VPN/Proxy/Tor
-  ☑ Block Datacenters
+   Block VPN/Proxy/Tor
+   Block Datacenters
 
 Country Blocking:
   Mode: Whitelist
@@ -507,15 +507,15 @@ Country Blocking:
 
 ---
 
-## 📊 Monitoring Configurations
+## Monitoring Configurations
 
 ### 19. Detailed Logging
 
 **Goal:** Maximum visibility
 
 ```
-Enable WireWall: ☑
-Enable Stats Logging: ☑
+Enable WireWall: 
+Enable Stats Logging: 
 
 (Install GeoLite2-City for detailed logs)
 
@@ -532,7 +532,7 @@ grep "Philadelphia" /site/assets/logs/wirewall.txt
 
 ---
 
-## 💡 Pro Tips
+## Pro Tips
 
 ### IP Whitelist Best Practices
 
@@ -582,9 +582,27 @@ High-traffic      | 30      | 30
 Landing Page      | 5       | 120
 ```
 
+### AJAX Troubleshooting
+
+If third-party modules or custom scripts stop working after enabling WireWall, try these options in order:
+
+```
+1. Add your AJAX path to Custom Trusted AJAX Paths:
+   /my-custom-ajax/
+
+2. If it uses a different pattern, add it to Custom API Paths:
+   /my-api/
+
+3. Last resort — enable "Disable AJAX Protection Completely":
+    Disable AJAX Protection Completely
+   (bypasses WireWall for ALL AJAX requests)
+```
+
+Note: logged-in ProcessWire users are always exempt from all checks automatically — no special configuration needed.
+
 ---
 
-## 🚨 Emergency Configurations
+## Emergency Configurations
 
 ### Under DDoS Attack
 
@@ -598,8 +616,8 @@ IMMEDIATE ACTIONS:
    Ban Minutes: 120
 
 3. Block proxy/VPN:
-   ☑ Block VPN/Proxy/Tor
-   ☑ Block Datacenters
+    Block VPN/Proxy/Tor
+    Block Datacenters
 
 4. Country whitelist:
    Mode: Whitelist
