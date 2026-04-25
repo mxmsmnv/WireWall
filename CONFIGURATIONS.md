@@ -1,604 +1,256 @@
 # WireWall Configuration Examples
 
-Practical configuration examples for common security scenarios. 19 ready-to-use configurations!
+Ready-to-use configurations for common security scenarios.
 
 ---
 
 ## Basic Configurations
 
-### 1. Blog/News Site
+### 1. Blog / News Site
 
 **Goal:** Protect from comment spam and DDoS
 
 ```
-Enable WireWall: 
+Enable WireWall: ✅
+Enable Logging:  ✅
 
 Rate Limiting:
-   Enable Rate Limiting
-  Requests: 20
-  Minutes: 60
-  Ban Minutes: 30
+  Requests: 20 / min
+  Ban: 30 min
 
-VPN/Proxy Detection:
-   Block VPN/Proxy/Tor
-  
-Block Action: Beautiful Block Page
-Enable Stats Logging: 
+Bot Protection:
+  ✅ Block Bad Bots
+
+VPN / Proxy:
+  ✅ Block VPN/Proxy/Tor
+
+Block Action: Show block page
 ```
-
-**Result:** Legitimate readers unaffected, bots blocked.
 
 ---
 
 ### 2. E-commerce Store
 
-**Goal:** Prevent fraud and bot scraping
+**Goal:** Prevent fraud, bot scraping, and carding attacks
 
 ```
-Enable WireWall: 
+Enable WireWall: ✅
 
 Country Blocking:
   Mode: Blacklist
-  Countries: [known fraud countries]
+  Countries: [high-fraud countries based on your logs]
 
 Rate Limiting:
-  Requests: 15
-  Minutes: 60
-  Ban Minutes: 60
+  Requests: 15 / min
+  Ban: 60 min
 
-VPN/Proxy Detection:
-   Block VPN/Proxy/Tor
-   Block Datacenters
+VPN / Proxy / Datacenter:
+  ✅ Block VPN/Proxy/Tor
+  ✅ Block Datacenters
 
-JavaScript Challenge:
-   Enable JS Challenge
+Bot Protection:
+  ✅ Block Bad Bots
+  ✅ JS Challenge
 
-Block Action: Beautiful Block Page
-Enable Stats Logging: 
+Exceptions:
+  Allowed ASNs: 15169 (Google), 8075 (Microsoft)
 ```
-
-**Result:** High security, minimal impact on customers.
 
 ---
 
-### 3. Corporate Website
+### 3. Corporate Website — Geo-Restricted
 
-**Goal:** Geo-restrict to specific countries
+**Goal:** Allow only specific countries
 
 ```
-Enable WireWall: 
-
 Country Blocking:
   Mode: Whitelist
   Countries: US, CA, GB, AU
 
 Rate Limiting:
-  Requests: 10
-  Minutes: 60
-  Ban Minutes: 60
+  Requests: 10 / min
+  Ban: 60 min
 
-Block Action: Beautiful Block Page
+Block Action: Show block page
 Custom Message: "This website is only accessible from authorized regions."
 ```
-
-**Result:** Access limited to specified countries only.
-
----
-
-## Geographic Configurations
-
-### 4. Block Attack Sources
-
-**Goal:** Block countries with high attack rates
-
-```
-Country Blocking:
-  Mode: Blacklist
-  Countries: [select based on your logs]
-  
-City Blocking:
-   Enable City Blocking
-  Mode: Blacklist
-  Cities:
-    Philadelphia
-    Beijing
-    Shanghai
-    Lagos
-    Mumbai
-
-VPN/Proxy Detection:
-   Block VPN/Proxy/Tor
-```
-
-**Result:** Targeted blocking of known attack sources.
-
----
-
-### 5. Allow Only Local Traffic
-
-**Goal:** Restrict to specific geographic region
-
-```
-Country Blocking:
-  Mode: Whitelist
-  Countries: US
-
-City Blocking:
-   Enable City Blocking
-  Mode: Whitelist
-  Cities:
-    Philadelphia, US
-    New York, US
-    Boston, US
-    Washington, US
-
-Subdivision Blocking:
-   Enable Subdivision Blocking
-  Mode: Whitelist
-  Subdivisions:
-    Pennsylvania, US
-    New York, US
-    Massachusetts, US
-```
-
-**Result:** Only specified US cities/states can access.
-
----
-
-### 6. Block Specific Regions
-
-**Goal:** Block specific states/provinces
-
-```
-Subdivision Blocking:
-   Enable Subdivision Blocking
-  Mode: Blacklist
-  Subdivisions:
-    California, US
-    Texas, US
-    New South Wales, AU
-    Bavaria, DE
-
-VPN/Proxy Detection:
-   Block VPN/Proxy/Tor
-```
-
-**Result:** Block entire regions without blocking whole countries.
-
-**Examples:**
-- California, US → BLOCKED
-- Texas, US → BLOCKED  
-- New York, US → ALLOWED
-- Sydney, AU → ALLOWED
-- New South Wales, AU → BLOCKED
-
----
-
-### 7. Allow Only Specific States
-
-**Goal:** Restrict to local states only
-
-```
-Subdivision Blocking:
-   Enable Subdivision Blocking
-  Mode: Whitelist
-  Subdivisions:
-    Pennsylvania, US
-    New Jersey, US
-    Delaware, US
-
-Country Blocking:
-  Mode: Whitelist
-  Countries: US
-```
-
-**Result:** Only these 3 US states can access.
 
 ---
 
 ## Security-Focused Configurations
 
-### 8. Maximum Security
+### 4. Maximum Security
 
 **Goal:** Lockdown against all automated threats
 
 ```
-Enable WireWall: 
-
 IP Whitelist:
-  YOUR.OFFICE.IP.ADDRESS
-  YOUR.HOME.IP.ADDRESS
+  YOUR.OFFICE.IP
+  YOUR.HOME.IP
 
 Rate Limiting:
-  Requests: 5
-  Minutes: 60
-  Ban Minutes: 120
+  Requests: 5 / min
+  Ban: 120 min
 
-VPN/Proxy Detection:
-   Block VPN/Proxy/Tor
-   Block Datacenters
+VPN / Proxy / Datacenter:
+  ✅ Block VPN/Proxy/Tor
+  ✅ Block Datacenters
 
 ASN Blocking:
   AS16509  (Amazon AWS)
   AS15169  (Google Cloud)
   AS14061  (DigitalOcean)
 
-JavaScript Challenge:
-   Enable JS Challenge
+Bot Protection:
+  ✅ Block Bad Bots
+  ✅ Block AI Bots
+  ✅ JS Challenge
 
-Global Rules:
-  User-Agent: bot, crawler, scraper, scanner
-  Path: /wp-admin, /administrator, /.env
+Custom Block Rules → Paths:
+  /wp-admin/*
+  /administrator/*
+  /.env
+  /xmlrpc.php
 
 Block Action: Silent 404
-```
 
-**Result:** Maximum protection. Logged-in users are always allowed through automatically. Blocked visitors receive a plain 404 with no WireWall fingerprint.
+Note: Logged-in users bypass all checks automatically.
+```
 
 ---
 
-### 9. Development/Staging Protection
+### 5. Development / Staging Server
 
 **Goal:** Allow only team members
 
 ```
-Enable WireWall: 
-
 IP Whitelist:
   OFFICE.IP.1
   OFFICE.IP.2
-  DEVELOPER.HOME.IP.1
-  DEVELOPER.HOME.IP.2
+  DEVELOPER.HOME.IP
 
 Country Blocking:
   Mode: Blacklist
   Countries: [all except your country]
 
 Rate Limiting:
-  Requests: 50
-  Minutes: 60
+  Requests: 50 / min
 
-Block Action: Beautiful Block Page
-Custom Message: "This is a development environment. Access is restricted to authorized personnel only."
+Block Action: Show block page
+Custom Message: "Development environment — access restricted."
 ```
-
-**Result:** Only whitelisted IPs can access.
 
 ---
 
-### 10. API Endpoint Protection
+### 6. Content Protection — Block AI Scrapers
 
-**Goal:** Protect API from abuse
+**Goal:** Prevent AI training bots from harvesting content
 
 ```
-Country-Specific Rules:
-  Country: All
-  Paths: /api/*, /graphql
-  Rules:
-    - User-Agent must contain "YourApp/"
-    - No curl, wget, python
+Bot Protection:
+  ✅ Block AI Bots  (GPTBot, ClaudeBot, GrokBot, Perplexity…)
+  ✅ Block Bad Bots
 
-Rate Limiting:
-  Requests: 30
-  Minutes: 60
-  Ban Minutes: 15
+VPN / Proxy / Datacenter:
+  ✅ Block Datacenters
 
-VPN/Proxy Detection:
-   Block VPN/Proxy/Tor
-   Block Datacenters
+Exceptions:
+  Allowed User-Agents: Googlebot, Bingbot  (keep for SEO)
+  Allowed ASNs: 15169, 8075
 ```
-
-**Result:** API protected from automated abuse.
 
 ---
 
-## Performance-Optimized Configurations
+## Geographic Configurations
 
-### 11. High-Traffic Site
+### 7. Block Specific Regions (Subdivisions)
+
+**Goal:** Block entire states or provinces without blocking the whole country
+
+```
+Geo Blocking → Subdivision Blocking:
+  ✅ Enable Subdivision Blocking
+  Mode: Blacklist
+  Subdivisions:
+    California, US
+    Texas, US
+    New South Wales, AU
+
+VPN / Proxy:
+  ✅ Block VPN/Proxy/Tor
+```
+
+Result: California → BLOCKED, New York → ALLOWED, Sydney → BLOCKED.
+
+---
+
+### 8. Allow Only Local States
+
+**Goal:** Restrict to specific US states
+
+```
+Country Blocking:
+  Mode: Whitelist
+  Countries: US
+
+Geo Blocking → Subdivision Blocking:
+  ✅ Enable Subdivision Blocking
+  Mode: Whitelist
+  Subdivisions:
+    Pennsylvania, US
+    New Jersey, US
+    Delaware, US
+```
+
+---
+
+## Performance Configurations
+
+### 9. High-Traffic Site
 
 **Goal:** Protect without impacting performance
 
 ```
-Enable WireWall: 
+Enable WireWall: ✅
 
 Rate Limiting:
-  Requests: 30
-  Minutes: 60
-  Ban Minutes: 30
+  Requests: 30 / min
+  Ban: 30 min
 
-VPN/Proxy Detection:
-   Block VPN/Proxy/Tor  (disabled for performance)
+VPN / Proxy:
+  ❌ Block VPN/Proxy/Tor  (skip — adds latency)
 
-JavaScript Challenge:
-   Enable JS Challenge  (disabled for performance)
+JS Challenge:
+  ❌  (skip — adds latency)
 
 Block Action: Silent 404
-Enable Stats Logging:   (disabled for performance)
+Enable Logging: ❌  (skip for performance)
 ```
-
-**Result:** Minimal overhead, rate limiting only.
 
 ---
 
-### 12. CDN-Friendly
+### 10. Behind Cloudflare / CDN
 
-**Goal:** Work with CloudFlare/CDN
+**Goal:** Correct IP detection behind a CDN
 
-```
-Enable WireWall: 
-
-(Add in config.php:)
+Add to `config.php`:
+```php
 $config->wireWallTrustProxy = true;
 $config->wireWallProxyHeader = 'HTTP_CF_CONNECTING_IP';
+```
 
+```
 Rate Limiting:
-  Requests: 20
-  Minutes: 60
+  Requests: 20 / min
 
 Country Blocking:
   Mode: Blacklist
   Countries: [as needed]
+
+VPN / Proxy / Datacenter:
+  ❌ Block Datacenters  (Cloudflare IPs are datacenter IPs)
+  Allowed ASNs: 13335 (Cloudflare)
 ```
-
-**Result:** Correct IP detection behind CDN.
-
----
-
-## User Experience Configurations
-
-### 13. Friendly Block Page
-
-**Goal:** Professional, helpful block message
-
-```
-Block Action: Beautiful Block Page
-
-Custom Block Message:
-"We've detected unusual activity from your location. 
-If you believe this is an error, please contact 
-support@yoursite.com with your IP address."
-
-Enable Stats Logging: 
-```
-
-**Result:** Users know how to get help.
-
----
-
-### 14. Silent Blocking
-
-**Goal:** Hide from attackers completely
-
-```
-Block Action: Silent 404
-
-Country Blocking:
-  Mode: Blacklist
-  Countries: [attack sources]
-
-VPN/Proxy Detection:
-   Block VPN/Proxy/Tor
-
-Enable Stats Logging: 
-```
-
-**Result:** Blocked visitors receive a plain-text "Not Found" response — no HTML, no WireWall branding, no fingerprint. Indistinguishable from a genuinely missing page.
-
----
-
-### 15. Custom Redirect
-
-**Goal:** Send blocked users elsewhere
-
-```
-Block Action: Redirect
-
-Redirect URL: https://yoursite.com/access-restricted
-
-(Create custom page at /access-restricted/ with explanation)
-```
-
-**Result:** Full control over block page.
-
----
-
-## Testing Configurations
-
-### 16. Safe Testing
-
-**Goal:** Test WireWall without breaking site
-
-```
-Enable WireWall: 
-
-IP Whitelist:
-  YOUR.IP.ADDRESS  (CRITICAL!)
-
-Rate Limiting:
-  Requests: 3
-  Minutes: 1
-  Ban Minutes: 2
-
-Block Action: Beautiful Block Page
-Enable Stats Logging: 
-```
-
-**Testing Steps:**
-1. Add your IP to whitelist FIRST (or simply be logged in — logged-in users bypass all checks)
-2. Enable module
-3. Use VPN or mobile to test blocking
-4. Check logs constantly
-5. Remove your IP from whitelist last
-
----
-
-## Advanced Configurations
-
-### 17. Multi-Layer Defense
-
-**Goal:** Comprehensive protection
-
-```
-Priority Layers:
-
-1. IP Whitelist:
-   OFFICE.IP
-   
-2. Rate Limiting:
-   10 req/min, 60 min ban
-   
-3. IP Blacklist:
-   KNOWN.ATTACKER.IP
-   
-4. VPN/Proxy Detection:
-    Enabled
-   
-5. Country Blocking:
-   Blacklist: [attack sources]
-   
-6. City Blocking:
-   Blacklist: [attack cities]
-   
-7. Subdivision Blocking:
-   Blacklist: [attack regions]
-   
-8. ASN Blocking:
-   Block datacenter ASNs
-   
-9. Global Rules:
-   Block bots, bad UAs, suspicious paths
-```
-
-**Result:** 9 layers of protection!
-
----
-
-### 18. Temporary Event Protection
-
-**Goal:** Extra protection during special events
-
-```
-(Before Event)
-
-Enable WireWall: 
-
-Rate Limiting:
-  Requests: 5
-  Minutes: 60
-  Ban Minutes: 120
-
-VPN/Proxy Detection:
-   Block VPN/Proxy/Tor
-   Block Datacenters
-
-Country Blocking:
-  Mode: Whitelist
-  Countries: [your target countries only]
-
-(After Event - Relax Settings)
-
-Rate Limiting:
-  Requests: 20
-  Minutes: 60
-
-Country Blocking:
-  Mode: Disabled or Blacklist only
-```
-
----
-
-## Monitoring Configurations
-
-### 19. Detailed Logging
-
-**Goal:** Maximum visibility
-
-```
-Enable WireWall: 
-Enable Stats Logging: 
-
-(Install GeoLite2-City for detailed logs)
-
-Logs will show:
-BLOCKED | US (Philadelphia, Pennsylvania) | 1.2.3.4 | AS7922 Comcast | rate-limit
-
-Monitor logs:
-tail -f /site/assets/logs/wirewall.txt
-
-Analyze with:
-grep BLOCKED /site/assets/logs/wirewall.txt | wc -l
-grep "Philadelphia" /site/assets/logs/wirewall.txt
-```
-
----
-
-## Pro Tips
-
-### IP Whitelist Best Practices
-
-```
-IP Whitelist:
-  # Your IPs (always whitelist yourself!)
-  YOUR.OFFICE.IP
-  YOUR.HOME.IP
-  
-  # Trusted services
-  MONITORING.SERVICE.IP
-  BACKUP.SERVICE.IP
-  
-  # Important customers (if needed)
-  VIP.CUSTOMER.IP
-  
-  # Comments for organization
-  # Support ranges in CIDR: 192.168.1.0/24
-```
-
-### Country Blocking Strategy
-
-```
-Start Conservative:
-1. Enable logging only (no blocking)
-2. Monitor for 1 week
-3. Analyze top blocked countries
-4. Add to blacklist gradually
-5. Monitor for false positives
-
-Avoid:
-- Blocking too many countries at once
-- Blocking your own country
-- Blocking without monitoring
-```
-
-### Rate Limiting Tuning
-
-```
-Site Type         | Req/Min | Ban Min
-------------------+---------+---------
-Blog/News         | 20      | 30
-E-commerce        | 15      | 60
-Corporate         | 10      | 60
-API               | 30      | 15
-High-traffic      | 30      | 30
-Landing Page      | 5       | 120
-```
-
-### AJAX Troubleshooting
-
-If third-party modules or custom scripts stop working after enabling WireWall, try these options in order:
-
-```
-1. Add your AJAX path to Custom Trusted AJAX Paths:
-   /my-custom-ajax/
-
-2. If it uses a different pattern, add it to Custom API Paths:
-   /my-api/
-
-3. Last resort — enable "Disable AJAX Protection Completely":
-    Disable AJAX Protection Completely
-   (bypasses WireWall for ALL AJAX requests)
-```
-
-Note: logged-in ProcessWire users are always exempt from all checks automatically — no special configuration needed.
 
 ---
 
@@ -606,29 +258,87 @@ Note: logged-in ProcessWire users are always exempt from all checks automaticall
 
 ### Under DDoS Attack
 
+**Immediate actions:**
+
 ```
-IMMEDIATE ACTIONS:
+1. Enable WireWall (if not already)
 
-1. Enable WireWall if not enabled
 2. Set aggressive rate limiting:
-   Requests: 3
-   Minutes: 1
-   Ban Minutes: 120
+   Requests: 3 / min
+   Ban: 120 min
 
-3. Block proxy/VPN:
-    Block VPN/Proxy/Tor
-    Block Datacenters
+3. Enable:
+   ✅ Block VPN/Proxy/Tor
+   ✅ Block Datacenters
 
-4. Country whitelist:
+4. Country Blocking:
    Mode: Whitelist
-   Countries: [your main countries only]
+   Countries: [your main markets only]
 
-5. Clear cache if overwhelmed:
-   Admin → Modules → WireWall → Clear All Cache
+5. Add attacking IPs to IP Blacklist
 
-6. Monitor logs:
-   tail -f /site/assets/logs/wirewall.txt
+6. Add attacking ASNs to Blocked ASNs
 
-7. Add attacking IPs to blacklist
-8. Add attacking ASNs to ASN blocking
+7. Monitor:
+   Admin → Setup → WireWall  (live dashboard)
+   Admin → Setup → Logs → wirewall
+
+8. Clear cache if overwhelmed:
+   Admin → Modules → WireWall → Cache Management → Clear All Cache
+```
+
+---
+
+## AJAX Troubleshooting
+
+If third-party modules break after enabling WireWall, try in order:
+
+```
+1. Add path to Custom Trusted AJAX Paths:
+   /my-module-path/
+
+2. Add to Custom API Paths (all HTTP methods):
+   /my-api/
+
+3. Last resort — enable Disable AJAX Protection Completely
+   (bypasses WireWall for all POST AJAX requests)
+```
+
+Note: Logged-in ProcessWire users are exempt from all checks automatically.
+
+---
+
+## Rate Limiting Reference
+
+| Site Type | Req/Min | Ban (min) |
+|---|---|---|
+| Blog / News | 20 | 30 |
+| E-commerce | 15 | 60 |
+| Corporate | 10 | 60 |
+| API | 30 | 15 |
+| High-traffic | 30 | 30 |
+| Landing Page | 5 | 120 |
+
+---
+
+## Exception Hierarchy
+
+Whitelist checks run fastest-first. The most efficient pattern:
+
+| Priority | Method | Covers |
+|---|---|---|
+| 1 | IP Whitelist | Specific trusted IPs |
+| 2 | ASN Whitelist | Entire networks (e.g. AS15169 = all Google) |
+| 3 | User-Agent Whitelist | Bot families (Googlebot, Bingbot…) |
+| 4 | Country Whitelist | Entire countries |
+
+Best practice: use ASN whitelisting for major services — one entry covers all their IPs.
+
+```
+Allowed ASNs:
+  15169  — Google (Googlebot, GSC, Analytics)
+  8075   — Microsoft (Bingbot)
+  32934  — Facebook (Social preview crawler)
+  13238  — Yandex
+  13335  — Cloudflare
 ```

@@ -1,7 +1,7 @@
 <?php namespace ProcessWire;
 
 /**
- * WireWall 1.3.5 - Advanced Traffic Firewall
+ * WireWall 1.4.0 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -13,9 +13,9 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.3.5
+ * @version 1.4.0
  * @author Maxim Alex
- * @date February 23, 2026
+ * @date April 24, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
  */
 
@@ -25,7 +25,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 135,
+            'version' => 140,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -124,8 +124,8 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             return null;
         }
         
-        $data = @unserialize($content);
-        if (!$data || !isset($data['expire'])) {
+        $data = @unserialize($content, ['allowed_classes' => false]);
+        if (!is_array($data) || !isset($data['expire'])) {
             return null;
         }
         
@@ -455,16 +455,19 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             return true;
         }
         
-        // Get current request count (60 seconds window)
+        // Window duration: 60 seconds (fixed "per minute" window matching the field label)
+        $windowSeconds = 60;
+        
+        // Get current request count for this window
         $count = (int)$this->cacheGet($cacheKey);
         $count++;
         
-        // Save incremented count with 60 second expiration
-        $this->cacheSet($cacheKey, $count, 60);
+        // Save incremented count, expiring at end of the window
+        $this->cacheSet($cacheKey, $count, $windowSeconds);
         
         // Check if exceeded limit
         if ($count > $this->rate_limit_requests) {
-            // Ban for specified minutes
+            // Ban for configured duration (rate_limit_minutes = ban duration)
             $banTime = $this->rate_limit_minutes * 60;
             $this->cacheSet($banKey, true, $banTime);
             // IMPORTANT: Delete the rate limit counter so that after the ban expires
@@ -869,13 +872,20 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     protected function isDatacenter($ip, $asn) {
         if (!$asn) return false;
         
-        // Known datacenter ASN keywords
+        // Known datacenter ASN keywords — deliberately specific to avoid false positives.
+        // 'cloud' and 'server' are intentionally excluded: many legitimate regional ISPs
+        // and corporate networks include these words in their org names.
         $datacenterKeywords = [
-            'amazon', 'aws', 'google', 'cloud', 'azure', 'microsoft',
-            'digitalocean', 'ovh', 'hetzner', 'linode', 'vultr',
-            'choopa', 'hosting', 'datacenter', 'data center',
-            'cloudflare', 'akamai', 'fastly', 'cdn', 'server',
-            'colocation', 'colo'
+            'amazon',      'aws',
+            'google cloud', 'googlecloud',
+            'azure',       'microsoft azure',
+            'digitalocean', 'ovh',
+            'hetzner',     'linode',
+            'vultr',       'choopa',
+            'cloudflare',  'akamai',
+            'fastly',      'colocation',
+            ' colo ',      'colo.',
+            'datacenter',  'data center',
         ];
         
         $asnLower = strtolower($asn);
@@ -1336,15 +1346,14 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             return false;
         }
         
-        // List of trusted ProcessWire module patterns
+        // List of trusted ProcessWire module POST key patterns.
+        // Intentionally narrow: only well-known PW core prefixes are listed.
+        // Generic words like 'field', 'page', 'process' are omitted because
+        // any attacker can craft a POST body with those keys to bypass WireWall.
         $trustedPatterns = [
+            'ProcessWire',     // Core ProcessWire actions (e.g. ProcessWireAction)
+            'InputfieldPage',  // Page autocomplete (specific enough)
             'bookmarks',       // FieldtypeBookmarks
-            'ProcessWire',     // Core ProcessWire modules
-            'InputfieldPage',  // Page autocomplete
-            'Inputfield',      // Other inputfields
-            'process',         // Process modules
-            'field',           // Field-related requests
-            'page',            // Page-related AJAX
         ];
         
         // Check POST parameters for trusted patterns
@@ -1831,36 +1840,124 @@ class WireWall extends WireData implements Module, ConfigurableModule {
 
     /**
      * Get real client IP (Cloudflare/Incapsula/Sucuri compatible)
+     *
+     * Security: proxy headers (CF-Connecting-IP, X-Forwarded-For, etc.) can be
+     * spoofed by any client if the server is reached directly. Each header is only
+     * trusted when REMOTE_ADDR belongs to the corresponding CDN/proxy IP range,
+     * or when the admin has explicitly opted in via $config->wireWallTrustProxy.
      */
     protected function getRealClientIP() {
-        // Cloudflare
-        if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) {
-            return $_SERVER['HTTP_CF_CONNECTING_IP'];
+        $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+
+        // Admin explicit opt-in (config.php: $config->wireWallTrustProxy = true)
+        $config = $this->wire('config');
+        if (!empty($config->wireWallTrustProxy)) {
+            // Honor custom header if specified
+            $customHeader = $config->wireWallProxyHeader ?? null;
+            if ($customHeader && !empty($_SERVER[$customHeader])) {
+                return $this->sanitizeIP($_SERVER[$customHeader]);
+            }
+            // Fall through to standard header chain below
         }
-        
-        // Incapsula
-        if (!empty($_SERVER['HTTP_INCAP_CLIENT_IP'])) {
-            return $_SERVER['HTTP_INCAP_CLIENT_IP'];
+
+        // Cloudflare — only trust CF-Connecting-IP when request arrives from a Cloudflare IP.
+        // Ranges: https://www.cloudflare.com/ips/
+        if (!empty($_SERVER['HTTP_CF_CONNECTING_IP']) && $this->isCloudflareIP($remoteAddr)) {
+            return $this->sanitizeIP($_SERVER['HTTP_CF_CONNECTING_IP']);
         }
-        
-        // Sucuri
-        if (!empty($_SERVER['HTTP_X_SUCURI_CLIENTIP'])) {
-            return $_SERVER['HTTP_X_SUCURI_CLIENTIP'];
+
+        // Incapsula (Imperva) — their egress ranges are 199.83.128.0/21,
+        // 198.143.32.0/21, 149.126.72.0/21, 103.28.248.0/22, 45.64.64.0/22,
+        // 185.11.124.0/22, 192.230.64.0/18. Trust only from those ranges.
+        if (!empty($_SERVER['HTTP_INCAP_CLIENT_IP']) && $this->isIncapsulaIP($remoteAddr)) {
+            return $this->sanitizeIP($_SERVER['HTTP_INCAP_CLIENT_IP']);
         }
-        
-        // Standard X-Forwarded-For
-        if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-            $ips = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
-            return trim($ips[0]);
+
+        // Sucuri — trust only when REMOTE_ADDR is a Sucuri proxy IP.
+        if (!empty($_SERVER['HTTP_X_SUCURI_CLIENTIP']) && $this->isSucuriIP($remoteAddr)) {
+            return $this->sanitizeIP($_SERVER['HTTP_X_SUCURI_CLIENTIP']);
         }
-        
-        // X-Real-IP
-        if (!empty($_SERVER['HTTP_X_REAL_IP'])) {
-            return $_SERVER['HTTP_X_REAL_IP'];
+
+        // Standard X-Forwarded-For — only trust when explicitly opted in via
+        // $config->wireWallTrustProxy, handled above. Here we skip it to
+        // prevent trivial spoofing on direct-connect servers.
+
+        // X-Real-IP — same: skip unless trust proxy is active.
+
+        // Direct connection — the only value we can always trust.
+        return $remoteAddr;
+    }
+
+    /**
+     * Sanitize an IP string extracted from a header (strip port, take first value)
+     */
+    protected function sanitizeIP($raw) {
+        // X-Forwarded-For may be a comma-separated list; take leftmost
+        if (strpos($raw, ',') !== false) {
+            $raw = trim(explode(',', $raw)[0]);
         }
-        
-        // Direct connection
-        return $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+        // Strip IPv6-mapped IPv4 prefix
+        if (strpos($raw, '::ffff:') === 0) {
+            $raw = substr($raw, 7);
+        }
+        // Strip port from IPv4 (host:port)
+        if (preg_match('/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(:\d+)?$/', $raw, $m)) {
+            return $m[1];
+        }
+        return $raw;
+    }
+
+    /**
+     * Check if IP belongs to Cloudflare's published ranges (IPv4 + IPv6)
+     * Source: https://www.cloudflare.com/ips/
+     */
+    protected function isCloudflareIP($ip) {
+        $ipv4Ranges = [
+            '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22',
+            '103.31.4.0/22',   '141.101.64.0/18', '108.162.192.0/18',
+            '190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22',
+            '198.41.128.0/17', '162.158.0.0/15',  '104.16.0.0/13',
+            '104.24.0.0/14',   '172.64.0.0/13',   '131.0.72.0/22',
+        ];
+        $ipv6Ranges = [
+            '2400:cb00::/32', '2606:4700::/32', '2803:f800::/32',
+            '2405:b500::/32', '2405:8100::/32', '2a06:98c0::/29',
+            '2c0f:f248::/32',
+        ];
+        $ranges = (strpos($ip, ':') !== false) ? $ipv6Ranges : $ipv4Ranges;
+        foreach ($ranges as $cidr) {
+            if ($this->matchCIDR($ip, $cidr)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Check if IP belongs to Incapsula/Imperva proxy ranges
+     */
+    protected function isIncapsulaIP($ip) {
+        $ranges = [
+            '199.83.128.0/21', '198.143.32.0/21', '149.126.72.0/21',
+            '103.28.248.0/22', '45.64.64.0/22',   '185.11.124.0/22',
+            '192.230.64.0/18', '107.154.0.0/16',   '45.60.0.0/16',
+        ];
+        foreach ($ranges as $cidr) {
+            if ($this->matchCIDR($ip, $cidr)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Check if IP belongs to Sucuri proxy ranges
+     */
+    protected function isSucuriIP($ip) {
+        $ranges = [
+            '192.88.134.0/23', '185.93.228.0/22', '66.248.200.0/22',
+            '208.109.0.0/22',
+        ];
+        foreach ($ranges as $cidr) {
+            if ($this->matchCIDR($ip, $cidr)) return true;
+        }
+        return false;
     }
 
     /**
@@ -1883,11 +1980,21 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             exit;
         }
         
-        // Silent 404 mode - truly stealthy, no HTML, no WireWall branding
+        // Silent 404 mode — serve ProcessWire's native 404 page
         if ($this->block_action === 'silent_404') {
-            http_response_code(404);
-            header('Content-Type: text/plain; charset=utf-8');
-            echo "Not Found";
+            $wire = $this->wire();
+            // Point ProcessWire to the 404 page and let it render normally
+            $page404 = $wire->pages->get($wire->config->http404PageID);
+            if ($page404 && $page404->id) {
+                $wire->page = $page404;
+                header('HTTP/1.1 404 Not Found');
+                // Allow ProcessPageView::execute to continue with the 404 page
+                return;
+            }
+            // Fallback if no 404 page configured
+            header('HTTP/1.1 404 Not Found');
+            header('Content-Type: text/html; charset=utf-8');
+            echo '<!DOCTYPE html><html><head><title>404 Not Found</title></head><body><h1>Not Found</h1></body></html>';
             exit;
         }
         
@@ -2215,124 +2322,483 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             $type = wire('input')->post('clear_cache');
             $cachePath = wire('config')->paths->cache . 'WireWall/';
             $cleared = 0;
-            
             if (is_dir($cachePath)) {
-                $files = scandir($cachePath);
-                foreach ($files as $file) {
+                foreach (scandir($cachePath) as $file) {
                     if ($file == '.' || $file == '..') continue;
-                    
-                    $shouldDelete = false;
-                    if ($type === 'all') {
-                        $shouldDelete = true;
-                    } elseif ($type === 'ratelimit' && strpos($file, 'ratelimit_') === 0) {
-                        $shouldDelete = true;
-                    } elseif ($type === 'ban' && strpos($file, 'ban_') === 0) {
-                        $shouldDelete = true;
-                    } elseif ($type === 'proxy' && strpos($file, 'proxy_') === 0) {
-                        $shouldDelete = true;
-                    } elseif ($type === 'geo' && strpos($file, 'geo_') === 0) {
-                        $shouldDelete = true;
-                    }
-                    
+                    $shouldDelete = (
+                        $type === 'all' ||
+                        ($type === 'ratelimit' && strpos($file, 'ratelimit_') === 0) ||
+                        ($type === 'ban'       && strpos($file, 'ban_')       === 0) ||
+                        ($type === 'proxy'     && strpos($file, 'proxy_')     === 0) ||
+                        ($type === 'geo'       && strpos($file, 'geo_')       === 0)
+                    );
                     if ($shouldDelete && is_file($cachePath . $file)) {
                         @unlink($cachePath . $file);
                         $cleared++;
                     }
                 }
             }
-            
             wire('session')->message("Cleared {$cleared} cache files ({$type})");
         }
-        
-        // === ENABLE MODULE ===
+
+        // =====================================================================
+        // 1. GENERAL
+        // =====================================================================
+        $fieldset = $modules->get('InputfieldFieldset');
+        $fieldset->label = 'General';
+        $fieldset->collapsed = Inputfield::collapsedNo;
+        $fieldset->icon = 'shield';
+
         $f = $modules->get('InputfieldCheckbox');
         $f->name = 'enabled';
         $f->label = 'Enable WireWall';
         $f->description = 'Turn on the firewall protection';
         $f->checked = isset($data['enabled']) && $data['enabled'] ? 'checked' : '';
-        $inputfields->add($f);
-        
-        // === ALLOW TRUSTED MODULES ===
-        $f = $modules->get('InputfieldCheckbox');
-        $f->name = 'allowTrustedModules';
-        $f->label = 'Allow AJAX from trusted modules';
-        $f->description = 'Allow AJAX requests from known ProcessWire modules (FieldtypeBookmarks, InputfieldPage, etc.)';
-        $f->notes = 'Recommended: Keep this enabled to allow ProcessWire modules to function properly. Disabling this may break AJAX functionality in your modules.';
-        $f->icon = 'check-circle';
-        $f->checked = (!isset($data['allowTrustedModules']) || $data['allowTrustedModules']) ? 'checked' : '';
-        $inputfields->add($f);
-        
-        // === DISABLE AJAX PROTECTION ===
-        $f = $modules->get('InputfieldCheckbox');
-        $f->name = 'disable_ajax_protection';
-        $f->label = 'Disable AJAX Protection Completely';
-        $f->description = 'Allow ALL AJAX requests to bypass WireWall checks, regardless of origin';
-        $f->notes = '⚠️ Use only if you have issues with AJAX on your site that cannot be resolved via trusted paths above. All AJAX requests (POST with X-Requested-With header) will bypass WireWall.';
-        $f->icon = 'warning';
-        $f->checked = isset($data['disable_ajax_protection']) && $data['disable_ajax_protection'] ? 'checked' : '';
-        $inputfields->add($f);
-        
-        // Custom Trusted Paths
-        $f = $modules->get('InputfieldTextarea');
-        $f->name = 'custom_trusted_paths';
-        $f->label = 'Custom Trusted AJAX Paths';
-        $f->description = 'Additional URL paths that should bypass WireWall for AJAX requests (one per line)';
-        $f->notes = 'Default trusted paths: /processwire/, /admin/, /ajax/
-Examples of custom paths:
-• /rockfrontend/ - RockFrontend module
-• /my-custom-ajax/ - Your custom AJAX directory
-• /live-search/ - Live search endpoints
+        $fieldset->add($f);
 
-Note: These paths apply only to POST AJAX requests (with X-Requested-With header).
-For API endpoints, use "Custom API Paths" field below.';
-        $f->rows = 5;
-        $f->value = isset($data['custom_trusted_paths']) ? $data['custom_trusted_paths'] : '';
-        $f->icon = 'code';
-        $f->showIf = 'allowTrustedModules=1';
-        $f->collapsed = Inputfield::collapsedBlank;
-        $inputfields->add($f);
-        
-        // Custom API Paths
-        $f = $modules->get('InputfieldTextarea');
-        $f->name = 'custom_api_paths';
-        $f->label = 'Custom API Paths (All HTTP Methods)';
-        $f->description = 'URL paths for API endpoints that should bypass WireWall for ALL HTTP methods (one per line)';
-        $f->notes = 'Default API paths: /api/, /api2/, /rest/
-Examples of custom API paths:
-• /graphql/ - GraphQL endpoint
-• /webhook/ - Webhook handlers
-• /v1/ - Versioned API
-• /endpoints/ - Custom API directory
-
-Important: These paths bypass WireWall for ALL HTTP methods (GET, POST, PUT, DELETE, PATCH).
-Only add paths that are secured by their own authentication (API keys, OAuth, etc.)';
-        $f->rows = 5;
-        $f->value = isset($data['custom_api_paths']) ? $data['custom_api_paths'] : '';
-        $f->icon = 'exchange';
-        $f->showIf = 'allowTrustedModules=1';
-        $f->collapsed = Inputfield::collapsedBlank;
-        $inputfields->add($f);
-        
-        // === STATISTICS & LOGGING ===
-        $fieldset = $modules->get('InputfieldFieldset');
-        $fieldset->label = 'Statistics & Logging';
-        $fieldset->collapsed = Inputfield::collapsedNo;
-        $fieldset->icon = 'bar-chart';
-        
         $f = $modules->get('InputfieldCheckbox');
         $f->name = 'enable_stats_logging';
-        $f->label = 'Enable Statistics Logging';
-        $f->description = 'Log all blocked and allowed requests with detailed information';
+        $f->label = 'Enable Logging';
+        $f->description = 'Log all blocked and allowed requests';
         $f->notes = 'View logs: Admin → Setup → Logs → wirewall';
         $f->checked = isset($data['enable_stats_logging']) && $data['enable_stats_logging'] ? 'checked' : '';
         $fieldset->add($f);
-        
+
+        $f = $modules->get('InputfieldRadios');
+        $f->name = 'block_action';
+        $f->label = 'Block Action';
+        $f->addOption('show_page', 'Show block page');
+        $f->addOption('silent_404', 'Silent 404 (stealth mode)');
+        $f->addOption('redirect', 'Redirect to URL');
+        $f->value = $data['block_action'] ?? 'show_page';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldText');
+        $f->name = 'redirect_url';
+        $f->label = 'Redirect URL';
+        $f->value = $data['redirect_url'] ?? '';
+        $f->showIf = 'block_action=redirect';
+        $f->collapsed = Inputfield::collapsedBlank;
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'block_message';
+        $f->label = 'Block Page Message';
+        $f->value = $data['block_message'] ?? 'Access from your location is currently unavailable.';
+        $f->rows = 2;
+        $f->showIf = 'block_action=show_page';
+        $f->collapsed = Inputfield::collapsedBlank;
+        $fieldset->add($f);
+
         $inputfields->add($fieldset);
         
-        // === CACHE MANAGEMENT ===
+        // =====================================================================
+        // 2. RATE LIMITING
+        // =====================================================================
+        $fieldset = $modules->get('InputfieldFieldset');
+        $fieldset->label = 'Rate Limiting';
+        $fieldset->collapsed = Inputfield::collapsedNo;
+        $fieldset->icon = 'tachometer';
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->name = 'rate_limit_enabled';
+        $f->label = 'Enable Rate Limiting';
+        $f->description = 'Limit requests per minute per IP address';
+        $f->checked = isset($data['rate_limit_enabled']) && $data['rate_limit_enabled'] ? 'checked' : '';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldInteger');
+        $f->name = 'rate_limit_requests';
+        $f->label = 'Requests Per Minute';
+        $f->description = 'Maximum requests allowed per minute from a single IP';
+        $f->value = $data['rate_limit_requests'] ?? 10;
+        $f->min = 1;
+        $f->max = 1000;
+        $f->showIf = 'rate_limit_enabled=1';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldInteger');
+        $f->name = 'rate_limit_minutes';
+        $f->label = 'Ban Duration (minutes)';
+        $f->description = 'How long to ban an IP after exceeding the rate limit';
+        $f->value = $data['rate_limit_minutes'] ?? 60;
+        $f->min = 1;
+        $f->max = 1440;
+        $f->showIf = 'rate_limit_enabled=1';
+        $fieldset->add($f);
+
+        $inputfields->add($fieldset);
+
+        // =====================================================================
+        // 3. BOT PROTECTION
+        // =====================================================================
+        $fieldset = $modules->get('InputfieldFieldset');
+        $fieldset->label = 'Bot Protection';
+        $fieldset->collapsed = Inputfield::collapsedNo;
+        $fieldset->icon = 'ban';
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->name = 'block_bad_bots';
+        $f->label = 'Block Bad Bots';
+        $f->description = 'Block scrapers, scanners, and malicious tools (wget, curl, scrapy, nmap, nikto, sqlmap, semrush, ahrefs…)';
+        $f->checked = isset($data['block_bad_bots']) && $data['block_bad_bots'] ? 'checked' : '';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->name = 'block_ai_bots';
+        $f->label = 'Block AI Training Bots';
+        $f->description = 'Block AI crawlers that train on your content (GPTBot, ClaudeBot, GrokBot, Perplexity, Google-Extended…)';
+        $f->checked = isset($data['block_ai_bots']) && $data['block_ai_bots'] ? 'checked' : '';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->name = 'block_search_bots';
+        $f->label = 'Block Search Engine Bots';
+        $f->description = 'Block Googlebot, Bingbot, Yandex, Baidu, etc.';
+        $f->notes = '⚠️ This will prevent search engine indexing.';
+        $f->checked = isset($data['block_search_bots']) && $data['block_search_bots'] ? 'checked' : '';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->name = 'js_challenge_enabled';
+        $f->label = 'JavaScript Challenge';
+        $f->description = 'Show a JS challenge to suspicious requests (headless browsers, missing UA). Real browsers pass automatically.';
+        $f->checked = isset($data['js_challenge_enabled']) && $data['js_challenge_enabled'] ? 'checked' : '';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->name = 'block_other_bots';
+        $f->label = 'Custom Bot Patterns';
+        $f->description = 'Block bots matching your custom User-Agent list below';
+        $f->checked = isset($data['block_other_bots']) && $data['block_other_bots'] ? 'checked' : '';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'other_bots_list';
+        $f->label = 'Custom Bot Pattern List';
+        $f->description = 'User-Agent substrings to block (one per line)';
+        $f->rows = 4;
+        $f->value = $data['other_bots_list'] ?? '';
+        $f->showIf = 'block_other_bots=1';
+        $f->collapsed = Inputfield::collapsedBlank;
+        $fieldset->add($f);
+
+        $inputfields->add($fieldset);
+
+        // =====================================================================
+        // 4. VPN / PROXY / DATACENTER
+        // =====================================================================
+        $fieldset = $modules->get('InputfieldFieldset');
+        $fieldset->label = 'VPN / Proxy / Datacenter';
+        $fieldset->collapsed = Inputfield::collapsedNo;
+        $fieldset->icon = 'globe';
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->name = 'block_proxy_vpn_tor';
+        $f->label = 'Block VPN / Proxy / Tor';
+        $f->description = 'Detect and block VPN, proxy servers, and Tor exit nodes via ip-api.com → ipinfo.io → ipapi.co';
+        $f->checked = isset($data['block_proxy_vpn_tor']) && $data['block_proxy_vpn_tor'] ? 'checked' : '';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->name = 'block_datacenters';
+        $f->label = 'Block Datacenters';
+        $f->description = 'Block traffic from AWS, Google Cloud, DigitalOcean, OVH, Hetzner, Akamai, Cloudflare, etc.';
+        $f->checked = isset($data['block_datacenters']) && $data['block_datacenters'] ? 'checked' : '';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'block_asns';
+        $f->label = 'Blocked ASNs';
+        $f->description = 'ASN numbers or organisation names to block (one per line). Example: AS16509 or Amazon or 16509';
+        $f->rows = 4;
+        $f->value = $data['block_asns'] ?? '';
+        $f->collapsed = Inputfield::collapsedBlank;
+        $fieldset->add($f);
+
+        $inputfields->add($fieldset);
+
+        // =====================================================================
+        // 5. GEO BLOCKING
+        // =====================================================================
+        $fieldset = $modules->get('InputfieldFieldset');
+        $fieldset->label = 'Geo Blocking';
+        $fieldset->collapsed = Inputfield::collapsedNo;
+        $fieldset->icon = 'map-marker';
+
+        // MaxMind status inline
+        $dataPath  = wire('config')->paths->assets . 'WireWall/';
+        $geoipPath = $dataPath . 'geoip/';
+        $hasCountryDb = file_exists($geoipPath . 'GeoLite2-Country.mmdb');
+        $hasAsnDb     = file_exists($geoipPath . 'GeoLite2-ASN.mmdb');
+        $hasCityDb    = file_exists($geoipPath . 'GeoLite2-City.mmdb');
+        $hasComposer  = file_exists($dataPath . 'vendor/autoload.php');
+        $maxmindOk    = $hasCountryDb && $hasAsnDb && $hasComposer;
+
+        if ($maxmindOk) {
+            $cityNote = $hasCityDb ? ' + City' : ' (City DB not installed — city/subdivision blocking unavailable)';
+            $statusHtml = "<p style='color:#10b981;margin:0 0 12px'>✅ MaxMind GeoLite2 active — Country + ASN{$cityNote}.</p>";
+        } else {
+            $missing = [];
+            if (!$hasCountryDb) $missing[] = 'GeoLite2-Country.mmdb';
+            if (!$hasAsnDb)     $missing[] = 'GeoLite2-ASN.mmdb';
+            if (!$hasComposer)  $missing[] = 'composer dependencies';
+            $statusHtml = "<p style='color:#f59e0b;margin:0 0 12px'>⚠️ MaxMind not detected (missing: " . implode(', ', $missing) . "). Using ip-api.com fallback. <a href='https://www.maxmind.com/en/geolite2/signup' target='_blank'>Install MaxMind</a> for better performance.</p>";
+        }
+
+        $f = $modules->get('InputfieldMarkup');
+        $f->value = $statusHtml;
+        $fieldset->add($f);
+
+        // Country
+        $f = $modules->get('InputfieldRadios');
+        $f->name = 'country_mode';
+        $f->label = 'Country Mode';
+        $f->addOption('blacklist', 'Blacklist — block selected countries');
+        $f->addOption('whitelist', 'Whitelist — allow only selected countries');
+        $f->value = $data['country_mode'] ?? 'blacklist';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldAsmSelect');
+        $f->name = 'blocked_countries';
+        $f->label = 'Countries';
+        $f->description = 'Select countries for the mode above';
+        foreach (self::getCountryList() as $code => $name) {
+            $f->addOption($code, "{$name} ({$code})");
+        }
+        $value = $data['blocked_countries'] ?? '';
+        if (is_string($value) && !empty($value)) {
+            $lines = preg_split('/[\r\n,]+/', $value);
+            $value = array_filter(array_map('trim', $lines));
+        }
+        $f->value = is_array($value) ? $value : [];
+        $fieldset->add($f);
+
+        // City blocking (only if City DB available)
+        if ($hasCityDb) {
+            $f = $modules->get('InputfieldCheckbox');
+            $f->name = 'city_blocking_enabled';
+            $f->label = 'Enable City Blocking';
+            $f->description = 'Block or allow by city name (requires GeoLite2-City)';
+            $f->checked = isset($data['city_blocking_enabled']) && $data['city_blocking_enabled'] ? 'checked' : '';
+            $fieldset->add($f);
+
+            $f = $modules->get('InputfieldRadios');
+            $f->name = 'city_mode';
+            $f->label = 'City Mode';
+            $f->addOption('blacklist', 'Blacklist');
+            $f->addOption('whitelist', 'Whitelist');
+            $f->value = $data['city_mode'] ?? 'blacklist';
+            $f->showIf = 'city_blocking_enabled=1';
+            $fieldset->add($f);
+
+            $f = $modules->get('InputfieldTextarea');
+            $f->name = 'blocked_cities';
+            $f->label = 'Cities (one per line)';
+            $f->description = 'Format: "City" or "City, CC" — e.g. Philadelphia, US';
+            $f->rows = 5;
+            $f->value = $data['blocked_cities'] ?? '';
+            $f->showIf = 'city_blocking_enabled=1';
+            $f->collapsed = Inputfield::collapsedBlank;
+            $fieldset->add($f);
+
+            // Subdivision blocking
+            $f = $modules->get('InputfieldCheckbox');
+            $f->name = 'subdivision_blocking_enabled';
+            $f->label = 'Enable Subdivision / Region Blocking';
+            $f->description = 'Block or allow by state, province, oblast (requires GeoLite2-City)';
+            $f->checked = isset($data['subdivision_blocking_enabled']) && $data['subdivision_blocking_enabled'] ? 'checked' : '';
+            $fieldset->add($f);
+
+            $f = $modules->get('InputfieldRadios');
+            $f->name = 'subdivision_mode';
+            $f->label = 'Subdivision Mode';
+            $f->addOption('blacklist', 'Blacklist');
+            $f->addOption('whitelist', 'Whitelist');
+            $f->value = $data['subdivision_mode'] ?? 'blacklist';
+            $f->showIf = 'subdivision_blocking_enabled=1';
+            $fieldset->add($f);
+
+            $f = $modules->get('InputfieldTextarea');
+            $f->name = 'blocked_subdivisions';
+            $f->label = 'Subdivisions (one per line)';
+            $f->description = 'Format: "Subdivision" or "Subdivision, CC" — e.g. Pennsylvania, US';
+            $f->rows = 5;
+            $f->value = $data['blocked_subdivisions'] ?? '';
+            $f->showIf = 'subdivision_blocking_enabled=1';
+            $f->collapsed = Inputfield::collapsedBlank;
+            $fieldset->add($f);
+        } else {
+            $f = $modules->get('InputfieldMarkup');
+            $f->value = "<p style='color:#9ca3af;font-style:italic'>City and subdivision blocking require GeoLite2-City.mmdb. <a href='https://www.maxmind.com/en/accounts/current/geoip/downloads' target='_blank'>Download from MaxMind</a> and place in <code>{$geoipPath}</code>.</p>";
+            $fieldset->add($f);
+        }
+
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'country_rules';
+        $f->label = 'Country-Specific Rules';
+        $f->description = 'Apply path / UA / referer rules per country. Format: CC:action:pattern (one per line). Actions: block_path, block_agent, block_referer.';
+        $f->notes = "RU:block_path:/admin/*\nCN:block_agent:BadBot\nUS:block_referer:spam.com";
+        $f->rows = 5;
+        $f->value = $data['country_rules'] ?? '';
+        $f->collapsed = Inputfield::collapsedBlank;
+        $fieldset->add($f);
+
+        $inputfields->add($fieldset);
+
+        // =====================================================================
+        // 6. IP CONTROL
+        // =====================================================================
+        $fieldset = $modules->get('InputfieldFieldset');
+        $fieldset->label = 'IP Control';
+        $fieldset->collapsed = Inputfield::collapsedNo;
+        $fieldset->icon = 'lock';
+
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'ip_whitelist';
+        $f->label = 'IP Whitelist (Always Allow)';
+        $f->description = 'IPs that bypass all blocking rules. Supports exact, wildcard (*), and CIDR notation. One per line.';
+        $f->rows = 4;
+        $f->value = $data['ip_whitelist'] ?? '';
+        $f->collapsed = Inputfield::collapsedBlank;
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'ip_blacklist';
+        $f->label = 'IP Blacklist (Always Block)';
+        $f->description = 'IPs that are always blocked. Supports exact, wildcard (*), and CIDR notation. One per line.';
+        $f->rows = 4;
+        $f->value = $data['ip_blacklist'] ?? '';
+        $f->collapsed = Inputfield::collapsedBlank;
+        $fieldset->add($f);
+
+        $inputfields->add($fieldset);
+
+        // =====================================================================
+        // 7. EXCEPTIONS (Allowed bots / IPs / ASNs)
+        // =====================================================================
+        $fieldset = $modules->get('InputfieldFieldset');
+        $fieldset->label = 'Exceptions';
+        $fieldset->description = 'Bots, IPs, and ASNs that bypass ALL WireWall checks';
+        $fieldset->collapsed = Inputfield::collapsedYes;
+        $fieldset->icon = 'check-square';
+
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'allowedUserAgents';
+        $f->label = 'Allowed User-Agents';
+        $f->description = 'User-Agent substrings to always allow (one per line)';
+        $f->notes = 'Googlebot, Bingbot, Yandex, facebookexternalhit, Slackbot, LinkedInBot, Twitterbot, WhatsApp, Applebot';
+        $f->rows = 6;
+        $f->value = isset($data['allowedUserAgents']) ? $data['allowedUserAgents'] : "Googlebot\nBingbot\nYandex\nfacebookexternalhit\nSlackbot\nLinkedInBot\nTwitterbot\nWhatsApp\nApplebot";
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'allowedIPs';
+        $f->label = 'Allowed IPs';
+        $f->description = 'IP addresses or CIDR ranges to always allow. Supports IPv4 and IPv6. One per line.';
+        $f->notes = "66.249.64.0/19 — Google Bot\n157.55.39.0/24 — Bing Bot\n77.88.5.0/24 — Yandex Bot";
+        $f->rows = 6;
+        $f->value = isset($data['allowedIPs']) ? $data['allowedIPs'] : '';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'allowedASNs';
+        $f->label = 'Allowed ASNs';
+        $f->description = 'ASN numbers or organisation names to always allow (one per line). Requires MaxMind ASN database.';
+        $f->notes = "15169 — Google\n8075 — Microsoft (Bing)\n32934 — Facebook\n13238 — Yandex";
+        $f->rows = 5;
+        $f->value = isset($data['allowedASNs']) ? $data['allowedASNs'] : "15169\n8075\n32934\n13238";
+        $fieldset->add($f);
+
+        $inputfields->add($fieldset);
+
+        // =====================================================================
+        // 8. CUSTOM RULES (Paths / UA / Referers)
+        // =====================================================================
+        $fieldset = $modules->get('InputfieldFieldset');
+        $fieldset->label = 'Custom Block Rules';
+        $fieldset->description = 'Block by path, User-Agent pattern, or referer domain';
+        $fieldset->collapsed = Inputfield::collapsedYes;
+        $fieldset->icon = 'filter';
+
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'blocked_paths';
+        $f->label = 'Blocked Paths';
+        $f->description = 'URL paths to block. Supports wildcards. One per line.';
+        $f->notes = '/wp-admin/* or *.php or /xmlrpc.php';
+        $f->rows = 4;
+        $f->value = $data['blocked_paths'] ?? '';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'blocked_user_agents';
+        $f->label = 'Blocked User-Agents';
+        $f->description = 'User-Agent substrings to block (one per line)';
+        $f->rows = 4;
+        $f->value = $data['blocked_user_agents'] ?? '';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'blocked_referers';
+        $f->label = 'Blocked Referers';
+        $f->description = 'Referer domains to block (one per line). Example: spam.com';
+        $f->rows = 4;
+        $f->value = $data['blocked_referers'] ?? '';
+        $fieldset->add($f);
+
+        $inputfields->add($fieldset);
+
+        // =====================================================================
+        // 9. AJAX / API SETTINGS
+        // =====================================================================
+        $fieldset = $modules->get('InputfieldFieldset');
+        $fieldset->label = 'AJAX & API Settings';
+        $fieldset->collapsed = Inputfield::collapsedYes;
+        $fieldset->icon = 'exchange';
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->name = 'allowTrustedModules';
+        $f->label = 'Allow AJAX from trusted ProcessWire modules';
+        $f->description = 'Recommended. Allows FieldtypeBookmarks, InputfieldPage, and other core modules to function correctly.';
+        $f->checked = (!isset($data['allowTrustedModules']) || $data['allowTrustedModules']) ? 'checked' : '';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'custom_trusted_paths';
+        $f->label = 'Custom Trusted AJAX Paths';
+        $f->description = 'Additional paths that bypass WireWall for POST AJAX requests (one per line). Default paths: /processwire/, /admin/, /ajax/';
+        $f->notes = "/rockfrontend/\n/my-custom-ajax/";
+        $f->rows = 4;
+        $f->value = isset($data['custom_trusted_paths']) ? $data['custom_trusted_paths'] : '';
+        $f->collapsed = Inputfield::collapsedBlank;
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'custom_api_paths';
+        $f->label = 'Custom API Paths (All HTTP Methods)';
+        $f->description = 'Paths that bypass WireWall for all HTTP methods (one per line). Default: /api/, /api2/, /rest/. Only add paths secured by their own auth.';
+        $f->notes = "/graphql/\n/webhook/";
+        $f->rows = 4;
+        $f->value = isset($data['custom_api_paths']) ? $data['custom_api_paths'] : '';
+        $f->collapsed = Inputfield::collapsedBlank;
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->name = 'disable_ajax_protection';
+        $f->label = 'Disable AJAX Protection Completely';
+        $f->description = 'Last resort: all AJAX requests bypass WireWall regardless of origin.';
+        $f->notes = '⚠️ Use only if AJAX issues cannot be resolved via trusted paths above.';
+        $f->checked = isset($data['disable_ajax_protection']) && $data['disable_ajax_protection'] ? 'checked' : '';
+        $fieldset->add($f);
+
+        $inputfields->add($fieldset);
+
+        // =====================================================================
+        // 10. CACHE MANAGEMENT
+        // =====================================================================
         $fieldset = $modules->get('InputfieldFieldset');
         $fieldset->label = 'Cache Management';
-        $fieldset->collapsed = Inputfield::collapsedNo;
+        $fieldset->collapsed = Inputfield::collapsedYes;
         $fieldset->icon = 'database';
         
         // Get cache statistics
@@ -2482,696 +2948,13 @@ Only add paths that are secured by their own authentication (API keys, OAuth, et
         $fieldset->add($f);
         
         $inputfields->add($fieldset);
-        
-        // === GEOLOCATION SECTION ===
-        $fieldset = $modules->get('InputfieldFieldset');
-        $fieldset->label = 'Geolocation Settings';
-        $fieldset->collapsed = Inputfield::collapsedNo;
-        
-        // === SETUP INFORMATION ===
-        // Show important info about data location
-        $setupInfo = $modules->get('InputfieldMarkup');
-        $setupInfo->label = '⚙️ Setup Information';
-        $setupInfo->description = 'Important information about data persistence';
-        $setupInfo->icon = 'info-circle';
-        $setupInfo->collapsed = Inputfield::collapsedYes;
-        
-        $dataPath = wire('config')->paths->assets . 'WireWall/';
-        $geoipPath = $dataPath . 'geoip/';
-        $vendorPath = $dataPath . 'vendor/';
-        
-        $setupInfo->value = '<div style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 15px; border-radius: 4px; margin-bottom: 15px;">
-            <h3 style="margin: 0 0 10px 0; color: #1976d2;">🎯 What\'s New in 1.2.1</h3>
-            <p style="margin: 0 0 10px 0;"><strong>Problem solved:</strong> GeoIP databases, vendor files, and composer dependencies are NO LONGER deleted during module updates!</p>
-            <p style="margin: 0;"><strong>New location:</strong> All persistent data is now stored in:</p>
-            <code style="display: block; background: #fff; padding: 10px; margin: 10px 0; border-radius: 4px;">' . htmlspecialchars($dataPath) . '</code>
-        </div>
-        
-        <div style="background: #fff3e0; border-left: 4px solid #ff9800; padding: 15px; border-radius: 4px; margin-bottom: 15px;">
-            <h3 style="margin: 0 0 10px 0; color: #f57c00;">📦 Migration (if upgrading from 1.2.0 or earlier)</h3>
-            <p style="margin: 0 0 10px 0;">Migration should happen automatically on first module load. If manual migration is needed:</p>
-            <ol style="margin: 10px 0 10px 20px; line-height: 1.8;">
-                <li>Create directory: <code>' . htmlspecialchars($dataPath) . '</code></li>
-                <li>Move GeoIP databases to: <code>' . htmlspecialchars($geoipPath) . '</code></li>
-                <li>Move vendor folder to: <code>' . htmlspecialchars($vendorPath) . '</code></li>
-                <li>Move composer.json/composer.lock to: <code>' . htmlspecialchars($dataPath) . '</code></li>
-                <li>Run: <code>cd ' . htmlspecialchars($dataPath) . ' && composer install</code></li>
-            </ol>
-        </div>
-        
-        <div style="background: #f1f8e9; border-left: 4px solid #8bc34a; padding: 15px; border-radius: 4px;">
-            <h3 style="margin: 0 0 10px 0; color: #689f38;">✅ Fresh Installation</h3>
-            <ol style="margin: 10px 0 10px 20px; line-height: 1.8;">
-                <li>Download MaxMind GeoLite2 databases</li>
-                <li>Place in: <code>' . htmlspecialchars($geoipPath) . '</code></li>
-                <li>Run: <code>cd ' . htmlspecialchars($dataPath) . ' && composer require geoip2/geoip2:^2.0</code></li>
-            </ol>
-            <p style="margin: 10px 0 0 0;"><strong>📁 Current paths:</strong></p>
-            <ul style="margin: 5px 0 0 20px; font-family: monospace; font-size: 13px;">
-                <li>Data: ' . htmlspecialchars($dataPath) . '</li>
-                <li>GeoIP: ' . htmlspecialchars($geoipPath) . '</li>
-                <li>Vendor: ' . htmlspecialchars($vendorPath) . '</li>
-            </ul>
-        </div>';
-        
-        $fieldset->add($setupInfo);
-        
-        // Check if MaxMind databases are installed
-        $countryDbPath = $geoipPath . 'GeoLite2-Country.mmdb';
-        $asnDbPath = $geoipPath . 'GeoLite2-ASN.mmdb';
-        $cityDbPath = $geoipPath . 'GeoLite2-City.mmdb';
-        $composerAutoload = $vendorPath . 'autoload.php';
-        
-        $hasCountryDb = file_exists($countryDbPath);
-        $hasAsnDb = file_exists($asnDbPath);
-        $hasCityDb = file_exists($cityDbPath);
-        $hasComposer = file_exists($composerAutoload);
-        $maxmindInstalled = $hasCountryDb && $hasAsnDb && $hasComposer;
-        
-        // Show status or instructions based on MaxMind availability
-        $f = $modules->get('InputfieldMarkup');
-        
-        if ($maxmindInstalled) {
-            // MaxMind is installed - show success status
-            $f->label = 'MaxMind GeoLite2 Status';
-            $f->icon = 'check-circle';
-            $f->collapsed = Inputfield::collapsedYes; // Collapse when installed
-            
-            $countrySize = file_exists($countryDbPath) ? round(filesize($countryDbPath) / 1024 / 1024, 2) : 0;
-            $asnSize = file_exists($asnDbPath) ? round(filesize($asnDbPath) / 1024 / 1024, 2) : 0;
-            $citySize = file_exists($cityDbPath) ? round(filesize($cityDbPath) / 1024 / 1024, 2) : 0;
-            $countryDate = file_exists($countryDbPath) ? date('Y-m-d', filemtime($countryDbPath)) : 'N/A';
-            $asnDate = file_exists($asnDbPath) ? date('Y-m-d', filemtime($asnDbPath)) : 'N/A';
-            $cityDate = file_exists($cityDbPath) ? date('Y-m-d', filemtime($cityDbPath)) : 'N/A';
-            
-            $f->value = "
-            <style>
-                .maxmind-status {
-                    background: #10b981;
-                    color: white;
-                    padding: 16px 20px;
-                    margin-bottom: 20px;
-                    display: flex;
-                    align-items: center;
-                    gap: 12px;
-                    font-weight: 500;
-                }
-                .maxmind-status-icon {
-                    font-size: 24px;
-                }
-                .maxmind-details {
-                    background: #f8f9fa;
-                    padding: 16px;
-                    border-left: 4px solid #10b981;
-                    margin-top: 16px;
-                }
-                .maxmind-details table {
-                    width: 100%;
-                    border-collapse: collapse;
-                }
-                .maxmind-details td {
-                    padding: 8px 0;
-                    border-bottom: 1px solid #e5e7eb;
-                }
-                .maxmind-details td:first-child {
-                    font-weight: 600;
-                    color: #666;
-                    width: 40%;
-                }
-                .maxmind-details tr:last-child td {
-                    border-bottom: none;
-                }
-                .maxmind-update-note {
-                    margin-top: 16px;
-                    padding: 12px;
-                    background: #fff3cd;
-                    border-left: 4px solid #ffc107;
-                    font-size: 13px;
-                    color: #856404;
-                }
-            </style>
-            <div class='maxmind-status'>
-                <span class='maxmind-status-icon'>✅</span>
-                <span>MaxMind GeoLite2 databases are installed and active</span>
-            </div>
-            <div class='maxmind-details'>
-                <table>
-                    <tr>
-                        <td>Country Database:</td>
-                        <td><code>{$countryDbPath}</code> ({$countrySize} MB)</td>
-                    </tr>
-                    <tr>
-                        <td>ASN Database:</td>
-                        <td><code>{$asnDbPath}</code> ({$asnSize} MB)</td>
-                    </tr>
-                    <tr>
-                        <td>City Database:</td>
-                        <td>" . ($hasCityDb ? "<code>{$cityDbPath}</code> ({$citySize} MB) ✅" : "<em style='color: #666;'>Not installed (optional - for detailed logging)</em>") . "</td>
-                    </tr>
-                    <tr>
-                        <td>Composer Autoload:</td>
-                        <td><code>{$composerAutoload}</code> ✅</td>
-                    </tr>
-                    <tr>
-                        <td>Last Updated:</td>
-                        <td>Country: {$countryDate} | ASN: {$asnDate}" . ($hasCityDb ? " | City: {$cityDate}" : "") . "</td>
-                    </tr>
-                    <tr>
-                        <td>Status:</td>
-                        <td><strong style='color: #10b981;'>Active - Using MaxMind for all GeoIP lookups</strong>" . ($hasCityDb ? "<br><em style='color: #666; font-size: 12px;'>City database enabled - logs will include city/region</em>" : "") . "</td>
-                    </tr>
-                </table>
-                <div class='maxmind-update-note'>
-                    <strong>💡 Update Reminder:</strong> MaxMind databases should be updated monthly. 
-                    Download new versions from <a href='https://www.maxmind.com/en/accounts/current/geoip/downloads' target='_blank'>MaxMind Downloads</a> 
-                    and replace the files in <code>{$geoipPath}</code>
-                </div>
-            </div>
-            ";
-        } else {
-            // MaxMind not installed - show setup instructions
-            $f->label = 'MaxMind Setup Instructions';
-            $f->icon = 'info-circle';
-            $f->collapsed = Inputfield::collapsedNo; // Expand when not installed (show warnings)
-            
-            $missingItems = [];
-            if (!$hasCountryDb) $missingItems[] = 'GeoLite2-Country.mmdb';
-            if (!$hasAsnDb) $missingItems[] = 'GeoLite2-ASN.mmdb';
-            if (!$hasComposer) $missingItems[] = 'Composer dependencies (geoip2/geoip2)';
-            
-            $missingList = implode(', ', $missingItems);
-            
-            $f->value = "
-            <style>
-                .maxmind-warning {
-                    background: #fff3cd;
-                    border-left: 4px solid #ffc107;
-                    padding: 16px;
-                    margin-bottom: 20px;
-                }
-                .maxmind-warning strong {
-                    color: #856404;
-                }
-                .maxmind-missing {
-                    background: #f8d7da;
-                    border-left: 4px solid #dc3545;
-                    padding: 12px;
-                    margin: 16px 0;
-                    font-size: 13px;
-                    color: #721c24;
-                }
-            </style>
-            <div class='maxmind-warning'>
-                <strong>⚠️ MaxMind Not Detected:</strong> WireWall is currently using HTTP API fallback (ip-api.com) for geolocation. 
-                For better performance and reliability, install MaxMind GeoLite2 databases.
-            </div>
-            <div class='maxmind-missing'>
-                <strong>Missing:</strong> {$missingList}
-            </div>
-            <p><strong>Setup Instructions:</strong></p>
-            <ol>
-                <li>Register for free at <a href='https://www.maxmind.com/en/geolite2/signup' target='_blank'>maxmind.com</a></li>
-                <li>Download <strong>GeoLite2-Country.mmdb</strong> and <strong>GeoLite2-ASN.mmdb</strong> (required)</li>
-                <li><em>Optional:</em> Download <strong>GeoLite2-City.mmdb</strong> for detailed logging (city/region)</li>
-                <li>Place files in: <code>{$geoipPath}</code></li>
-                <li>Run: <code>cd {$dataPath} && composer require geoip2/geoip2</code></li>
-                <li>Refresh this page to see status update</li>
-            </ol>
-            <p><em>Without MaxMind databases, WireWall will automatically use ip-api.com (HTTP fallback). This works but is slower and has rate limits.</em></p>
-            ";
-        }
-        
-        $fieldset->add($f);
-        
-        $inputfields->add($fieldset);
-        
-        // === COUNTRY BLOCKING ===
-        $fieldset = $modules->get('InputfieldFieldset');
-        $fieldset->label = 'Country Blocking';
-        $fieldset->collapsed = Inputfield::collapsedNo;
-        
-        $f = $modules->get('InputfieldRadios');
-        $f->name = 'country_mode';
-        $f->label = 'Blocking Mode';
-        $f->addOption('blacklist', 'Blacklist (block selected countries)');
-        $f->addOption('whitelist', 'Whitelist (allow only selected countries)');
-        $f->value = $data['country_mode'] ?? 'blacklist';
-        $fieldset->add($f);
-        
-        $f = $modules->get('InputfieldAsmSelect');
-        $f->name = 'blocked_countries';
-        $f->label = 'Blocked Countries';
-        $f->description = 'Select countries for blacklist/whitelist mode';
-        foreach (self::getCountryList() as $code => $name) {
-            $f->addOption($code, "{$name} ({$code})");
-        }
-        // Handle both array (AsmSelect) and string (textarea) formats
-        $value = $data['blocked_countries'] ?? '';
-        if (is_string($value) && !empty($value)) {
-            // Convert string to array for AsmSelect (manual parsing since this is static)
-            $lines = preg_split('/[\r\n,]+/', $value);
-            $value = array_filter(array_map('trim', $lines));
-        }
-        $f->value = is_array($value) ? $value : [];
-        $fieldset->add($f);
-        
-        $inputfields->add($fieldset);
-        
-        // === CITY BLOCKING ===
-        $fieldset = $modules->get('InputfieldFieldset');
-        $fieldset->label = 'City Blocking (Requires GeoLite2-City)';
-        $fieldset->description = 'Block or allow access based on city location. Requires GeoLite2-City.mmdb database.';
-        
-        // Check if City database is available
-        // Use new /site/assets/WireWall/ path (1.2.1+)
-        $dataPath = wire('config')->paths->assets . 'WireWall/';
-        $geoipPath = $dataPath . 'geoip/';
-        $cityDbPath = $geoipPath . 'GeoLite2-City.mmdb';
-        $hasCityDb = file_exists($cityDbPath);
-        
-        // Collapse if database is installed, expand if not (to show warning)
-        $fieldset->collapsed = $hasCityDb ? Inputfield::collapsedYes : Inputfield::collapsedNo;
-        
-        if (!$hasCityDb) {
-            $f = $modules->get('InputfieldMarkup');
-            $f->value = "<div style='background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px; margin-bottom: 16px;'>
-                <strong>⚠️ City Database Not Installed</strong><br>
-                City-based blocking requires GeoLite2-City.mmdb database.<br>
-                <a href='https://www.maxmind.com/en/accounts/current/geoip/downloads' target='_blank'>Download from MaxMind</a> 
-                and place in <code>{$geoipPath}</code>
-            </div>";
-            $fieldset->add($f);
-        } else {
-            $f = $modules->get('InputfieldMarkup');
-            $f->value = "<div style='background: #d1fae5; border-left: 4px solid #10b981; padding: 12px; margin-bottom: 16px;'>
-                <strong>✅ City Database Active</strong><br>
-                City-based blocking is available. Configure rules below.
-            </div>";
-            $fieldset->add($f);
-        }
-        
-        $f = $modules->get('InputfieldCheckbox');
-        $f->name = 'city_blocking_enabled';
-        $f->label = 'Enable City Blocking';
-        $f->description = 'Enable or disable city-based access control';
-        $f->checked = isset($data['city_blocking_enabled']) && $data['city_blocking_enabled'] ? 'checked' : '';
-        if (!$hasCityDb) {
-            $f->attr('disabled', 'disabled');
-            $f->notes = 'Disabled - City database not installed';
-        }
-        $fieldset->add($f);
-        
-        $f = $modules->get('InputfieldRadios');
-        $f->name = 'city_mode';
-        $f->label = 'City Blocking Mode';
-        $f->addOption('blacklist', 'Blacklist (block selected cities)');
-        $f->addOption('whitelist', 'Whitelist (allow only selected cities)');
-        $f->value = $data['city_mode'] ?? 'blacklist';
-        $f->showIf = 'city_blocking_enabled=1';
-        $fieldset->add($f);
-        
-        $f = $modules->get('InputfieldTextarea');
-        $f->name = 'blocked_cities';
-        $f->label = 'Cities List';
-        $f->description = 'Enter city names (one per line). Format: "City" or "City, Country"';
-        $f->notes = 'Examples: Philadelphia, Beijing, London, Sydney, AU, New York, US';
-        $f->rows = 8;
-        $f->value = $data['blocked_cities'] ?? '';
-        $f->showIf = 'city_blocking_enabled=1';
-        $fieldset->add($f);
-        
-        $inputfields->add($fieldset);
-        
-        // === SUBDIVISION/REGION BLOCKING ===
-        $fieldset = $modules->get('InputfieldFieldset');
-        $fieldset->label = 'Subdivision/Region Blocking (Requires GeoLite2-City)';
-        $fieldset->description = 'Block or allow access based on subdivision/region (state, province, oblast). Requires GeoLite2-City.mmdb database.';
-        
-        // Collapse if database is installed, expand if not (to show warning)
-        $fieldset->collapsed = $hasCityDb ? Inputfield::collapsedYes : Inputfield::collapsedNo;
-        
-        if (!$hasCityDb) {
-            $f = $modules->get('InputfieldMarkup');
-            $f->value = "<div style='background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px; margin-bottom: 16px;'>
-                <strong>⚠️ City Database Not Installed</strong><br>
-                Subdivision-based blocking requires GeoLite2-City.mmdb database.<br>
-                <a href='https://www.maxmind.com/en/accounts/current/geoip/downloads' target='_blank'>Download from MaxMind</a> 
-                and place in <code>{$geoipPath}</code>
-            </div>";
-            $fieldset->add($f);
-        } else {
-            $f = $modules->get('InputfieldMarkup');
-            $f->value = "<div style='background: #d1fae5; border-left: 4px solid #10b981; padding: 12px; margin-bottom: 16px;'>
-                <strong>✅ City Database Active</strong><br>
-                Subdivision-based blocking is available. Configure rules below.
-            </div>";
-            $fieldset->add($f);
-        }
-        
-        $f = $modules->get('InputfieldCheckbox');
-        $f->name = 'subdivision_blocking_enabled';
-        $f->label = 'Enable Subdivision Blocking';
-        $f->description = 'Enable or disable subdivision/region-based access control';
-        $f->checked = isset($data['subdivision_blocking_enabled']) && $data['subdivision_blocking_enabled'] ? 'checked' : '';
-        if (!$hasCityDb) {
-            $f->attr('disabled', 'disabled');
-            $f->notes = 'Disabled - City database not installed';
-        }
-        $fieldset->add($f);
-        
-        $f = $modules->get('InputfieldRadios');
-        $f->name = 'subdivision_mode';
-        $f->label = 'Subdivision Blocking Mode';
-        $f->addOption('blacklist', 'Blacklist (block selected subdivisions)');
-        $f->addOption('whitelist', 'Whitelist (allow only selected subdivisions)');
-        $f->value = $data['subdivision_mode'] ?? 'blacklist';
-        $f->showIf = 'subdivision_blocking_enabled=1';
-        $fieldset->add($f);
-        
-        $f = $modules->get('InputfieldTextarea');
-        $f->name = 'blocked_subdivisions';
-        $f->label = 'Subdivisions List';
-        $f->description = 'Enter subdivision/region names (one per line). Format: "Subdivision" or "Subdivision, Country"';
-        $f->notes = 'Examples: Pennsylvania | California, US | New South Wales, AU | Bavaria | England, GB';
-        $f->rows = 8;
-        $f->value = $data['blocked_subdivisions'] ?? '';
-        $f->showIf = 'subdivision_blocking_enabled=1';
-        $fieldset->add($f);
-        
-        $inputfields->add($fieldset);
-        
-        // === ANTI-BOT / VPN / PROXY / TOR ===
-        $fieldset = $modules->get('InputfieldFieldset');
-        $fieldset->label = 'Anti-Bot / VPN / Proxy / Tor';
-        $fieldset->collapsed = Inputfield::collapsedNo;
-        
-        $f = $modules->get('InputfieldCheckbox');
-        $f->name = 'block_proxy_vpn_tor';
-        $f->label = 'Block VPN/Proxy/Tor';
-        $f->description = 'Block known VPN, proxy servers, and Tor exit nodes';
-        $f->notes = 'Uses multi-API detection: ip-api.com → ipinfo.io → ipapi.co';
-        $f->checked = isset($data['block_proxy_vpn_tor']) && $data['block_proxy_vpn_tor'] ? 'checked' : '';
-        $fieldset->add($f);
-        
-        $f = $modules->get('InputfieldCheckbox');
-        $f->name = 'block_datacenters';
-        $f->label = 'Block Datacenters';
-        $f->description = 'Block traffic from datacenters (AWS, Google Cloud, DigitalOcean, OVH, Hetzner, etc.)';
-        $f->checked = isset($data['block_datacenters']) && $data['block_datacenters'] ? 'checked' : '';
-        $fieldset->add($f);
-        
-        $f = $modules->get('InputfieldTextarea');
-        $f->name = 'block_asns';
-        $f->label = 'Blocked ASNs';
-        $f->description = 'List of ASN numbers or organization names to block (one per line)';
-        $f->notes = 'Example: AS16509 or Amazon or 16509';
-        $f->rows = 5;
-        $f->value = $data['block_asns'] ?? '';
-        $fieldset->add($f);
-        
-        $f = $modules->get('InputfieldCheckbox');
-        $f->name = 'js_challenge_enabled';
-        $f->label = 'Enable JavaScript Challenge';
-        $f->description = 'Show JS challenge for suspicious requests (headless browsers, no cookies, too short UA)';
-        $f->notes = 'Real browsers pass automatically. Headless bots are blocked.';
-        $f->checked = isset($data['js_challenge_enabled']) && $data['js_challenge_enabled'] ? 'checked' : '';
-        $fieldset->add($f);
-        
-        $inputfields->add($fieldset);
-        
-        // === RATE LIMITING ===
-        $fieldset = $modules->get('InputfieldFieldset');
-        $fieldset->label = 'Rate Limiting';
-        $fieldset->collapsed = Inputfield::collapsedNo;
-        
-        $f = $modules->get('InputfieldCheckbox');
-        $f->name = 'rate_limit_enabled';
-        $f->label = 'Enable Rate Limiting';
-        $f->description = 'Limit requests per minute per IP address';
-        $f->checked = isset($data['rate_limit_enabled']) && $data['rate_limit_enabled'] ? 'checked' : '';
-        $fieldset->add($f);
-        
-        $f = $modules->get('InputfieldInteger');
-        $f->name = 'rate_limit_requests';
-        $f->label = 'Requests Per Minute';
-        $f->description = 'Maximum requests allowed per minute from single IP';
-        $f->value = $data['rate_limit_requests'] ?? 10;
-        $f->min = 1;
-        $f->max = 1000;
-        $f->showIf = 'rate_limit_enabled=1';
-        $fieldset->add($f);
-        
-        $f = $modules->get('InputfieldInteger');
-        $f->name = 'rate_limit_minutes';
-        $f->label = 'Ban Duration (minutes)';
-        $f->description = 'How long to ban IP after exceeding rate limit';
-        $f->value = $data['rate_limit_minutes'] ?? 60;
-        $f->min = 1;
-        $f->max = 1440;
-        $f->showIf = 'rate_limit_enabled=1';
-        $fieldset->add($f);
-        
-        $inputfields->add($fieldset);
-        
-        // === GLOBAL RULES (CATEGORIZED BOTS) ===
-        $fieldset = $modules->get('InputfieldFieldset');
-        $fieldset->label = 'Global Rules - Bot Categories';
-        $fieldset->collapsed = Inputfield::collapsedNo;
-        
-        $f = $modules->get('InputfieldCheckbox');
-        $f->name = 'block_bad_bots';
-        $f->label = 'Block Known Bad Bots';
-        $f->description = 'Block scrapers, scanners, and malicious bots';
-        $f->notes = 'Blocks: wget, curl, scrapy, nmap, nikto, sqlmap, semrush, ahrefs, etc.';
-        $f->checked = isset($data['block_bad_bots']) && $data['block_bad_bots'] ? 'checked' : '';
-        $fieldset->add($f);
-        
-        $f = $modules->get('InputfieldCheckbox');
-        $f->name = 'block_search_bots';
-        $f->label = 'Block Search Engine Bots';
-        $f->description = 'Block search engine crawlers (Googlebot, Bingbot, Yandex, Baidu, etc.)';
-        $f->notes = '⚠️ WARNING: This will prevent your site from being indexed by search engines!';
-        $f->checked = isset($data['block_search_bots']) && $data['block_search_bots'] ? 'checked' : '';
-        $fieldset->add($f);
-        
-        $f = $modules->get('InputfieldCheckbox');
-        $f->name = 'block_ai_bots';
-        $f->label = 'Block AI Training Bots';
-        $f->description = 'Block AI company bots that train on your content';
-        $f->notes = 'Blocks: GPTBot, ClaudeBot, GrokBot, Perplexity, Google-Extended, etc.';
-        $f->checked = isset($data['block_ai_bots']) && $data['block_ai_bots'] ? 'checked' : '';
-        $fieldset->add($f);
-        
-        $f = $modules->get('InputfieldCheckbox');
-        $f->name = 'block_other_bots';
-        $f->label = 'Block Other Bots (Custom List)';
-        $f->description = 'Block bots from your custom list below';
-        $f->checked = isset($data['block_other_bots']) && $data['block_other_bots'] ? 'checked' : '';
-        $fieldset->add($f);
-        
-        $f = $modules->get('InputfieldTextarea');
-        $f->name = 'other_bots_list';
-        $f->label = 'Custom Bot Patterns';
-        $f->description = 'User-Agent patterns to block (one per line)';
-        $f->rows = 5;
-        $f->value = $data['other_bots_list'] ?? '';
-        $f->showIf = 'block_other_bots=1';
-        $fieldset->add($f);
-        
-        $inputfields->add($fieldset);
-        
-        // === GLOBAL RULES (PATHS/UA/REFERERS) ===
-        $fieldset = $modules->get('InputfieldFieldset');
-        $fieldset->label = 'Global Rules - Paths / User Agents / Referers';
-        $fieldset->collapsed = Inputfield::collapsedYes;
-        
-        $f = $modules->get('InputfieldTextarea');
-        $f->name = 'blocked_paths';
-        $f->label = 'Blocked Paths';
-        $f->description = 'URL paths to block (one per line, supports wildcards)';
-        $f->notes = 'Example: /wp-admin/* or *.php or /admin/*';
-        $f->rows = 5;
-        $f->value = $data['blocked_paths'] ?? '';
-        $fieldset->add($f);
-        
-        $f = $modules->get('InputfieldTextarea');
-        $f->name = 'blocked_user_agents';
-        $f->label = 'Blocked User Agents';
-        $f->description = 'User-Agent patterns to block (one per line)';
-        $f->rows = 5;
-        $f->value = $data['blocked_user_agents'] ?? '';
-        $fieldset->add($f);
-        
-        $f = $modules->get('InputfieldTextarea');
-        $f->name = 'blocked_referers';
-        $f->label = 'Blocked Referers';
-        $f->description = 'Referer domains to block (one per line)';
-        $f->notes = 'Example: spam.com or bad-site.net';
-        $f->rows = 5;
-        $f->value = $data['blocked_referers'] ?? '';
-        $fieldset->add($f);
-        
-        $inputfields->add($fieldset);
-        
-        // === COUNTRY-SPECIFIC RULES ===
-        $fieldset = $modules->get('InputfieldFieldset');
-        $fieldset->label = 'Country-Specific Rules';
-        $fieldset->collapsed = Inputfield::collapsedYes;
-        
-        $f = $modules->get('InputfieldTextarea');
-        $f->name = 'country_rules';
-        $f->label = 'Country Rules';
-        $f->description = 'Different rules for different countries';
-        $f->notes = 'Format: COUNTRY:action:pattern (one per line)
-Examples:
-RU:block_path:/admin/*
-CN:block_agent:BadBot
-US:block_referer:spam.com';
-        $f->rows = 10;
-        $f->value = $data['country_rules'] ?? '';
-        $fieldset->add($f);
-        
-        $inputfields->add($fieldset);
-        
-        // === IP WHITELIST / BLACKLIST ===
-        $fieldset = $modules->get('InputfieldFieldset');
-        $fieldset->label = 'IP Address Control';
-        $fieldset->collapsed = Inputfield::collapsedYes;
-        
-        $f = $modules->get('InputfieldTextarea');
-        $f->name = 'ip_whitelist';
-        $f->label = 'IP Whitelist (Always Allow)';
-        $f->description = 'IPs that bypass ALL blocking rules (one per line)';
-        $f->notes = 'Supports: exact (1.2.3.4), wildcard (1.2.3.*), CIDR (192.168.0.0/16)';
-        $f->rows = 5;
-        $f->value = $data['ip_whitelist'] ?? '';
-        $fieldset->add($f);
-        
-        $f = $modules->get('InputfieldTextarea');
-        $f->name = 'ip_blacklist';
-        $f->label = 'IP Blacklist (Always Block)';
-        $f->description = 'IPs that are ALWAYS blocked (one per line)';
-        $f->notes = 'Supports: exact (1.2.3.4), wildcard (1.2.3.*), CIDR (192.168.0.0/16)';
-        $f->rows = 5;
-        $f->value = $data['ip_blacklist'] ?? '';
-        $fieldset->add($f);
-        
-        $inputfields->add($fieldset);
-        
-        // === EXCEPTIONS / WHITELIST ===
-        $fieldset = $modules->get('InputfieldFieldset');
-        $fieldset->label = 'Exceptions / Whitelist';
-        $fieldset->description = 'Allow specific bots and IPs to bypass all WireWall checks';
-        $fieldset->collapsed = Inputfield::collapsedNo;
-        $fieldset->icon = 'check-square';
-        
-        // Allowed User-Agents
-        $f = $modules->get('InputfieldTextarea');
-        $f->name = 'allowedUserAgents';
-        $f->label = 'Allowed User-Agents (Bots Whitelist)';
-        $f->description = 'User-Agent patterns to allow (one per line). These bots will bypass ALL WireWall checks.';
-        $f->notes = 'Common legitimate bots:
-• Googlebot - Google Search
-• Bingbot - Bing Search  
-• Yandex - Yandex Search
-• facebookexternalhit - Facebook crawling
-• Slackbot - Slack link previews
-• LinkedInBot - LinkedIn
-• Twitterbot - Twitter cards
-• WhatsApp - WhatsApp previews
-• Applebot - Apple Search';
-        $f->rows = 10;
-        $f->value = isset($data['allowedUserAgents']) ? $data['allowedUserAgents'] : "Googlebot\nBingbot\nYandex\nfacebookexternalhit\nSlackbot\nLinkedInBot\nTwitterbot\nWhatsApp\nApplebot";
-        $f->icon = 'robot';
-        $fieldset->add($f);
-        
-        // Allowed IPs
-        $f = $modules->get('InputfieldTextarea');
-        $f->name = 'allowedIPs';
-        $f->label = 'Allowed IPs (IP Whitelist)';
-        $f->description = 'IP addresses or CIDR ranges to allow (one per line). These IPs will bypass ALL WireWall checks. Supports both IPv4 and IPv6.';
-        $f->notes = 'Examples (IPv4):
-• 66.249.64.0/19 - Google Bot IPs
-• 157.55.39.0/24 - Bing Bot IPs  
-• 77.88.5.0/24 - Yandex Bot IPs
-• 192.168.1.100 - Single IP
-• 10.0.0.0/8 - Private network
 
-Examples (IPv6):
-• 2601:41:c780:6740::/64 - IPv6 subnet
-• 2001:4860::/32 - Google IPv6 range
-• 2a00:1450::/32 - Google IPv6 range
-• 2001:db8::1 - Single IPv6 address
-
-For Google Bot IPs, see: https://developers.google.com/search/docs/crawling-indexing/verifying-googlebot';
-        $f->rows = 8;
-        $f->value = isset($data['allowedIPs']) ? $data['allowedIPs'] : '';
-        $f->icon = 'globe';
-        $fieldset->add($f);
-        
-        // Allowed ASNs
-        $f = $modules->get('InputfieldTextarea');
-        $f->name = 'allowedASNs';
-        $f->label = 'Allowed ASNs (Autonomous System Numbers)';
-        $f->description = 'ASN numbers or organization names to allow (one per line). These ASNs will bypass ALL WireWall checks.';
-        $f->notes = 'Major services ASNs:
-• AS15169 or 15169 - Google
-• AS8075 or 8075 - Microsoft (Bing)
-• AS32934 or 32934 - Facebook
-• AS13238 or 13238 - Yandex
-• AS16509 or 16509 - Amazon AWS
-• AS54113 or 54113 - Fastly CDN
-• AS13335 or 13335 - Cloudflare
-• AS46489 or 46489 - Twilio
-
-You can use ASN numbers (15169) or with AS prefix (AS15169) or organization names (Google).
-MaxMind GeoLite2 ASN database required for this feature.';
-        $f->rows = 8;
-        $f->value = isset($data['allowedASNs']) ? $data['allowedASNs'] : "15169\n8075\n32934\n13238";
-        $f->icon = 'sitemap';
-        $fieldset->add($f);
-        
-        $inputfields->add($fieldset);
-        
-        // === BLOCK ACTION ===
-        $fieldset = $modules->get('InputfieldFieldset');
-        $fieldset->label = 'Block Action';
-        $fieldset->collapsed = Inputfield::collapsedNo;
-        
-        $f = $modules->get('InputfieldRadios');
-        $f->name = 'block_action';
-        $f->label = 'Action for Blocked Visitors';
-        $f->addOption('show_page', 'Show beautiful block page');
-        $f->addOption('redirect', 'Redirect to URL');
-        $f->addOption('silent_404', 'Return 404 silently (stealth mode) — plain "Not Found", no HTML, no WireWall branding');
-        $f->value = $data['block_action'] ?? 'show_page';
-        $fieldset->add($f);
-        
-        $f = $modules->get('InputfieldText');
-        $f->name = 'redirect_url';
-        $f->label = 'Redirect URL';
-        $f->description = 'URL to redirect blocked visitors';
-        $f->value = $data['redirect_url'] ?? '';
-        $f->showIf = 'block_action=redirect';
-        $fieldset->add($f);
-        
-        $f = $modules->get('InputfieldTextarea');
-        $f->name = 'block_message';
-        $f->label = 'Block Message';
-        $f->description = 'Custom message shown on block page';
-        $f->value = $data['block_message'] ?? 'Access from your location is currently unavailable.';
-        $f->rows = 3;
-        $f->showIf = 'block_action=show_page';
-        $fieldset->add($f);
-        
-        $inputfields->add($fieldset);
-        
         // Hidden field: version (auto-updated on each save)
         $f = $modules->get('InputfieldHidden');
         $f->name = 'version';
-        $f->value = $data['version']; // Module version number
+        $f->value = $data['version'];
         $inputfields->add($f);
-        
+
         return $inputfields;
     }
     
