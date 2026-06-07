@@ -1,7 +1,7 @@
 <?php namespace ProcessWire;
 
 /**
- * WireWall 1.4.0 - Advanced Traffic Firewall
+ * WireWall 1.5.0 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -13,7 +13,7 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.4.0
+ * @version 1.5.0
  * @author Maxim Alex
  * @date April 24, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
@@ -25,7 +25,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 140,
+            'version' => 150,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -362,19 +362,32 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             return;
         }
         
-        // === PRIORITY 2: RATE LIMITING ===
+        // === PRIORITY 2: ACTIVE TEMPORARY BAN ===
+        if ($this->isIPBanned($ip)) {
+            $this->blockAccess('temporary-ban', $ip, $country, $asn, $userAgent);
+            return;
+        }
+
+        // === PRIORITY 2.5: URL / USER-AGENT TRIGGER RULES ===
+        $triggerReason = $this->checkTriggerRules($ip, $userAgent, $requestUri);
+        if ($triggerReason) {
+            $this->blockAccess($triggerReason, $ip, $country, $asn, $userAgent);
+            return;
+        }
+
+        // === PRIORITY 3: RATE LIMITING ===
         if ($this->rate_limit_enabled && $this->isRateLimited($ip)) {
-            $this->blockAccess('rate-limit', $ip, null, null, $userAgent);
+            $this->blockAccess('rate-limit', $ip, $country, $asn, $userAgent);
             return;
         }
         
-        // === PRIORITY 3: IP BLACKLIST (ALWAYS BLOCK) ===
+        // === PRIORITY 4: IP BLACKLIST (ALWAYS BLOCK) ===
         if ($this->isIPBlacklisted($ip)) {
             $this->blockAccess('ip', $ip, null, null, $userAgent);
             return;
         }
         
-        // === PRIORITY 4: JS CHALLENGE CHECK ===
+        // === PRIORITY 5: JS CHALLENGE CHECK ===
         if ($this->js_challenge_enabled) {
             // Check if suspicious AND no valid cookie
             if ($this->isSuspiciousRequest($userAgent) && !$this->verifyChallengeCookie()) {
@@ -383,37 +396,37 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             }
         }
         
-        // === PRIORITY 5: VPN/PROXY/TOR DETECTION ===
+        // === PRIORITY 6: VPN/PROXY/TOR DETECTION ===
         if ($this->block_proxy_vpn_tor && $this->isProxyVPNTor($ip)) {
             $this->blockAccess('proxy-vpn-tor', $ip, $country, $asn, $userAgent);
             return;
         }
         
-        // === PRIORITY 6: DATACENTER DETECTION ===
+        // === PRIORITY 7: DATACENTER DETECTION ===
         if ($this->block_datacenters && $this->isDatacenter($ip, $asn)) {
             $this->blockAccess('datacenter', $ip, $country, $asn, $userAgent);
             return;
         }
         
-        // === PRIORITY 7: ASN BLOCKING ===
+        // === PRIORITY 8: ASN BLOCKING ===
         if ($asn && $this->isBlockedASN($asn)) {
             $this->blockAccess('asn-blocked', $ip, $country, $asn, $userAgent);
             return;
         }
         
-        // === PRIORITY 8: GLOBAL RULES (bots, paths, UA, referer) ===
+        // === PRIORITY 9: GLOBAL RULES (bots, paths, UA, referer) ===
         if ($this->checkGlobalRules($ip, $userAgent, $path, $referer)) {
             $this->blockAccess('global', $ip, $country, $asn, $userAgent);
             return;
         }
         
-        // === PRIORITY 9: COUNTRY BLOCKING (blacklist/whitelist) ===
+        // === PRIORITY 10: COUNTRY BLOCKING (blacklist/whitelist) ===
         if ($country && $this->checkCountryBlocking($country)) {
             $this->blockAccess('country', $ip, $country, $asn, $userAgent);
             return;
         }
         
-        // === PRIORITY 9.5: CITY BLOCKING (blacklist/whitelist) ===
+        // === PRIORITY 10.5: CITY BLOCKING (blacklist/whitelist) ===
         if ($this->city_blocking_enabled && $this->geoipCityReader) {
             $cityData = $this->getCityData($ip);
             if ($cityData && $this->checkCityBlocking($cityData)) {
@@ -422,7 +435,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             }
         }
         
-        // === PRIORITY 9.6: SUBDIVISION/REGION BLOCKING (blacklist/whitelist) ===
+        // === PRIORITY 10.6: SUBDIVISION/REGION BLOCKING (blacklist/whitelist) ===
         if ($this->subdivision_blocking_enabled && $this->geoipCityReader) {
             $cityData = $this->getCityData($ip);
             if ($cityData && $this->checkSubdivisionBlocking($cityData)) {
@@ -431,7 +444,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             }
         }
         
-        // === PRIORITY 10: COUNTRY-SPECIFIC RULES ===
+        // === PRIORITY 11: COUNTRY-SPECIFIC RULES ===
         if ($country && $this->checkCountryRules($country, $userAgent, $path, $referer)) {
             $this->blockAccess('country-rule', $ip, $country, $asn, $userAgent);
             return;
@@ -477,6 +490,123 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         }
         
         return false;
+    }
+
+    /**
+     * Check if an IP has an active temporary ban.
+     */
+    protected function isIPBanned($ip) {
+        return $this->cacheGet("ban_{$ip}") ? true : false;
+    }
+
+    /**
+     * Temporarily ban an IP using the shared ban cache.
+     */
+    protected function banIP($ip, $seconds) {
+        $seconds = max(60, (int)$seconds);
+        $this->cacheSet("ban_{$ip}", true, $seconds);
+    }
+
+    /**
+     * Check URL/query string and User-Agent trigger rules.
+     *
+     * Rules match case-insensitive substrings by default. Wildcards are supported
+     * with "*", and multiple alternatives may be separated with "|".
+     */
+    protected function checkTriggerRules($ip, $userAgent, $requestUri) {
+        $matched = false;
+        $matchedType = '';
+
+        if ($this->trigger_url_patterns ?? '') {
+            foreach ($this->parseTriggerPatterns($this->trigger_url_patterns) as $pattern) {
+                if ($this->matchTriggerPattern($requestUri, $pattern)) {
+                    $matched = true;
+                    $matchedType = 'url';
+                    break;
+                }
+            }
+        }
+
+        if (!$matched && ($this->trigger_user_agents ?? '')) {
+            foreach ($this->parseTriggerPatterns($this->trigger_user_agents) as $pattern) {
+                if ($this->matchTriggerPattern($userAgent, $pattern)) {
+                    $matched = true;
+                    $matchedType = 'user-agent';
+                    break;
+                }
+            }
+        }
+
+        if (!$matched) {
+            return false;
+        }
+
+        $action = $this->trigger_rule_action ?? 'strike';
+        $banMinutes = max(1, (int)($this->trigger_ban_minutes ?? ($this->rate_limit_minutes ?? 60)));
+
+        if ($action === 'block') {
+            $this->banIP($ip, $banMinutes * 60);
+            return "trigger-{$matchedType}";
+        }
+
+        return $this->addTriggerStrike($ip, $matchedType, $banMinutes);
+    }
+
+    /**
+     * Add one trigger strike and return a block reason once the threshold is met.
+     */
+    protected function addTriggerStrike($ip, $matchedType, $banMinutes) {
+        $cacheKey = "trigger_strike_{$ip}";
+        $limit = max(1, (int)($this->trigger_strike_limit ?? 3));
+        $windowMinutes = max(1, (int)($this->trigger_strike_window_minutes ?? 60));
+
+        $count = (int)$this->cacheGet($cacheKey);
+        $count++;
+
+        if ($count >= $limit) {
+            $this->banIP($ip, $banMinutes * 60);
+            @unlink($this->getCachePath($cacheKey));
+            return "trigger-{$matchedType}-strike-limit";
+        }
+
+        $this->cacheSet($cacheKey, $count, $windowMinutes * 60);
+
+        if ($this->enable_stats_logging) {
+            $this->wire('log')->save('wirewall', "TRIGGER STRIKE | {$ip} | {$matchedType} | {$count}/{$limit}");
+        }
+
+        return false;
+    }
+
+    /**
+     * Parse trigger rules, allowing pipe-separated alternatives on each line.
+     */
+    protected function parseTriggerPatterns($text) {
+        $patterns = [];
+        foreach ($this->parseRules($text) as $rule) {
+            foreach (explode('|', $rule) as $pattern) {
+                $pattern = trim($pattern);
+                if ($pattern !== '') {
+                    $patterns[] = $pattern;
+                }
+            }
+        }
+        return $patterns;
+    }
+
+    /**
+     * Match a trigger pattern against URL or User-Agent text.
+     */
+    protected function matchTriggerPattern($text, $pattern) {
+        $text = (string)$text;
+        $pattern = trim((string)$pattern);
+        if ($pattern === '') return false;
+
+        if (strpos($pattern, '*') !== false) {
+            return $this->matchPattern($text, $pattern);
+        }
+
+        return stripos($text, $pattern) !== false;
     }
 
     /**
@@ -1831,7 +1961,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         if ($text === $pattern) return true;
         
         if (strpos($pattern, '*') !== false) {
-            $regex = '/^' . str_replace(['/', '*'], ['\/', '.*'], $pattern) . '$/i';
+            $regex = '/^' . str_replace('\*', '.*', preg_quote($pattern, '/')) . '$/i';
             return preg_match($regex, $text) === 1;
         }
         
@@ -2012,7 +2142,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         
         // Get country name
         $countryNames = $this->getCountryNames();
-        $countryName = $countryNames[$country] ?? $country ?? 'Unknown';
+        $countryName = $country ? ($countryNames[$country] ?? $country) : 'Unknown';
         
         // Build location string with city if available
         $locationStr = $countryName;
@@ -2717,7 +2847,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         // =====================================================================
         $fieldset = $modules->get('InputfieldFieldset');
         $fieldset->label = 'Custom Block Rules';
-        $fieldset->description = 'Block by path, User-Agent pattern, or referer domain';
+        $fieldset->description = 'Block by path, User-Agent pattern, referer domain, or configurable trigger strikes';
         $fieldset->collapsed = Inputfield::collapsedYes;
         $fieldset->icon = 'filter';
 
@@ -2736,6 +2866,63 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f->description = 'User-Agent substrings to block (one per line)';
         $f->rows = 4;
         $f->value = $data['blocked_user_agents'] ?? '';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldRadios');
+        $f->name = 'trigger_rule_action';
+        $f->label = 'Trigger Rule Action';
+        $f->description = 'Choose what happens when a URL/query or User-Agent trigger matches.';
+        $f->addOption('strike', 'Add strike, then ban after threshold');
+        $f->addOption('block', 'Block and ban immediately');
+        $f->value = $data['trigger_rule_action'] ?? 'strike';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldInteger');
+        $f->name = 'trigger_strike_limit';
+        $f->label = 'Trigger Strike Limit';
+        $f->description = 'Number of trigger matches before the IP is temporarily banned.';
+        $f->value = $data['trigger_strike_limit'] ?? 3;
+        $f->min = 1;
+        $f->max = 1000;
+        $f->showIf = 'trigger_rule_action=strike';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldInteger');
+        $f->name = 'trigger_strike_window_minutes';
+        $f->label = 'Trigger Strike Window (minutes)';
+        $f->description = 'How long trigger strikes are remembered before resetting.';
+        $f->value = $data['trigger_strike_window_minutes'] ?? 60;
+        $f->min = 1;
+        $f->max = 1440;
+        $f->showIf = 'trigger_rule_action=strike';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldInteger');
+        $f->name = 'trigger_ban_minutes';
+        $f->label = 'Trigger Ban Duration (minutes)';
+        $f->description = 'How long to ban an IP after an immediate trigger block or strike limit.';
+        $f->value = $data['trigger_ban_minutes'] ?? ($data['rate_limit_minutes'] ?? 60);
+        $f->min = 1;
+        $f->max = 1440;
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'trigger_url_patterns';
+        $f->label = 'URL / Query Trigger Patterns';
+        $f->description = 'Case-insensitive URL and query string substrings that trigger the action above. Supports wildcards and pipe-separated alternatives.';
+        $f->notes = 'wp-json|wp-admin|wp-login|wp-content|wp-includes';
+        $f->rows = 4;
+        $f->value = $data['trigger_url_patterns'] ?? '';
+        $f->collapsed = Inputfield::collapsedBlank;
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'trigger_user_agents';
+        $f->label = 'User-Agent Trigger Patterns';
+        $f->description = 'Case-insensitive User-Agent substrings that trigger the action above. Supports wildcards and pipe-separated alternatives.';
+        $f->rows = 4;
+        $f->value = $data['trigger_user_agents'] ?? '';
+        $f->collapsed = Inputfield::collapsedBlank;
         $fieldset->add($f);
 
         $f = $modules->get('InputfieldTextarea');

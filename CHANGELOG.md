@@ -4,6 +4,24 @@ All notable changes to WireWall are documented here.
 
 ---
 
+## 1.5.0 — June 7, 2026
+
+### New Features
+
+- Added URL/query trigger rules that can add strikes or immediately ban an IP when suspicious request strings match.
+- Added User-Agent trigger rules with the same strike or immediate-ban behavior.
+- Added configurable trigger action, strike threshold, strike window, and ban duration settings.
+- Added pipe-separated trigger alternatives, so patterns like `wp-json|wp-admin|wp-login|wp-content|wp-includes` can be managed compactly.
+
+### Bug Fixes
+
+- Fixed a PHP 8.5 deprecation when a block page was rendered with an unknown country value.
+- Rate-limit blocks now pass resolved country and ASN data to block rendering and logs.
+- Temporary bans are now enforced independently from the rate-limiting toggle, so trigger bans remain active even when rate limiting is disabled.
+- Wildcard path matching now escapes regex metacharacters correctly before expanding `*`.
+
+---
+
 ## 1.4.0 — April 25, 2026
 
 ### New Module

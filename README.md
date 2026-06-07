@@ -1,7 +1,7 @@
 # WireWall — Advanced Security & Firewall Module for ProcessWire
 
 **Author:** Maxim Alex | **GitHub:** [mxmsmnv](https://github.com/mxmsmnv)  
-**Version:** 1.4.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
+**Version:** 1.5.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
 
 Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection, rate limiting, VPN/Proxy/Tor detection, JS challenge, and a real-time admin dashboard.
 
@@ -31,6 +31,7 @@ Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection,
 - **Datacenter blocking** — AWS, Google Cloud, DigitalOcean, Azure, OVH, Hetzner, Akamai…
 - **ASN blocking** — block entire networks by autonomous system number
 - **JavaScript challenge** — transparent challenge for suspicious requests
+- **URL / User-Agent trigger rules** — add strikes or immediately ban IPs when request URLs, query strings, or User-Agents match suspicious patterns
 - **IP whitelist / blacklist** — exact, wildcard, and CIDR support
 - **IP spoofing protection** — proxy headers (CF-Connecting-IP, Incap, Sucuri) only trusted when REMOTE_ADDR belongs to the CDN's published IP ranges
 
