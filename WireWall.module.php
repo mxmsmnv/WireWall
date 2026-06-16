@@ -14,7 +14,7 @@
  * - IPv4/IPv6 support with CIDR
  *
  * @version 1.5.0
- * @author Maxim Alex
+ * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @date April 24, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
  */
@@ -30,7 +30,8 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             'singular' => true,
             'icon' => 'shield',
             'requires' => 'ProcessWire>=3.0.200,PHP>=8.1',
-            'author' => 'Maxim Alex'
+            'author' => 'Maxim Semenov'
+        'href'     => 'https://smnv.org',
         ];
     }
 

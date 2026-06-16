@@ -10,7 +10,7 @@
  * The module registers a page at Admin > Setup > WireWall
  *
  * @version 1.0.0
- * @author Maxim Alex
+ * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @requires WireWall, ProcessWire>=3.0.200, PHP>=8.1
  */
 class ProcessWireWall extends Process implements Module {
@@ -20,7 +20,8 @@ class ProcessWireWall extends Process implements Module {
             'title'       => 'WireWall Dashboard',
             'summary'     => 'Firewall statistics and live event log',
             'version'     => 100,
-            'author'      => 'Maxim Alex',
+            'author'      => 'Maxim Semenov',
+            'href'     => 'https://smnv.org',
             'icon'        => 'shield',
             'requires'    => ['WireWall', 'ProcessWire>=3.0.200'],
             'permission'  => 'wirewall-dashboard',
