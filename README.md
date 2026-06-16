@@ -1,6 +1,7 @@
 # WireWall — Advanced Security & Firewall Module for ProcessWire
 
 **Author:** Maxim Alex | **GitHub:** [mxmsmnv](https://github.com/mxmsmnv)  
+If this project helps your work, consider supporting future development: [GitHub Sponsors](https://github.com/sponsors/mxmsmnv) or [smnv.org/sponsor](https://smnv.org/sponsor/).  
 **Version:** 1.5.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
 
 Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection, rate limiting, VPN/Proxy/Tor detection, JS challenge, and a real-time admin dashboard.
