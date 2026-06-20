@@ -4,6 +4,8 @@
 **Website:** [smnv.org](https://smnv.org)  
 **Email:** [maxim@smnv.org](mailto:maxim@smnv.org)
 
+![WireWall](assets/WireWall.png)
+
 If this project helps your work, consider supporting future development: [GitHub Sponsors](https://github.com/sponsors/mxmsmnv) or [smnv.org/sponsor](https://smnv.org/sponsor/).  
 **Version:** 1.5.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
 
