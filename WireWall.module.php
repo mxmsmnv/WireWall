@@ -1,7 +1,7 @@
 <?php namespace ProcessWire;
 
 /**
- * WireWall 1.5.0 - Advanced Traffic Firewall
+ * WireWall 1.6.0 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -13,7 +13,7 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.5.0
+ * @version 1.6.0
  * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @date April 24, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
@@ -25,13 +25,13 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 150,
+            'version' => 160,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
             'requires' => 'ProcessWire>=3.0.200,PHP>=8.1',
-            'author' => 'Maxim Semenov'
-        'href'     => 'https://smnv.org',
+            'author' => 'Maxim Semenov',
+            'href' => 'https://smnv.org',
         ];
     }
 
@@ -77,6 +77,13 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      */
     protected function getVendorPath() {
         return $this->getDataPath() . 'vendor/';
+    }
+
+    /**
+     * Get traffic history directory path (AI-friendly request history)
+     */
+    protected function getTrafficHistoryPath() {
+        return $this->getDataPath() . 'traffic/';
     }
     
     /**
@@ -153,7 +160,8 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             'subdivision_blocking_enabled', 'block_proxy_vpn_tor', 
             'block_datacenters', 'js_challenge_enabled', 'rate_limit_enabled',
             'block_bad_bots', 'block_search_bots', 'block_ai_bots', 
-            'block_other_bots', 'enable_stats_logging', 'disable_ajax_protection'
+            'block_other_bots', 'enable_stats_logging', 'enable_traffic_history',
+            'disable_ajax_protection'
         ];
         
         foreach ($checkboxFields as $field) {
@@ -212,7 +220,8 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             'subdivision_blocking_enabled', 'block_proxy_vpn_tor', 
             'block_datacenters', 'js_challenge_enabled', 'rate_limit_enabled',
             'block_bad_bots', 'block_search_bots', 'block_ai_bots', 
-            'block_other_bots', 'enable_stats_logging', 'disable_ajax_protection'
+            'block_other_bots', 'enable_stats_logging', 'enable_traffic_history',
+            'disable_ajax_protection'
         ];
         
         foreach ($checkboxFields as $field) {
@@ -345,6 +354,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         
         // === PRIORITY 1: IP WHITELIST (ALWAYS ALLOW) ===
         if ($this->isIPWhitelisted($ip)) {
+            $this->recordTrafficHistory($ip, null, null, true, 'ip-whitelist', $userAgent);
             $this->logAccess($ip, null, null, true, '', $userAgent);
             return;
         }
@@ -359,6 +369,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         // === PRIORITY 1.5: ALLOWED BOTS/IPs/ASNs (EXCEPTIONS) ===
         // Allow legitimate bots (Google, Bing, Yandex, etc.)
         if ($this->isAllowedBot($userAgent, $ip, $asn)) {
+            $this->recordTrafficHistory($ip, $country, $asn, true, 'allowed-bot', $userAgent);
             $this->logAccess($ip, $country, $asn, true, 'allowed-bot', $userAgent);
             return;
         }
@@ -452,6 +463,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         }
         
         // === ACCESS ALLOWED ===
+        $this->recordTrafficHistory($ip, $country, $asn, true, '', $userAgent);
         if ($this->enable_stats_logging) {
             $this->logAccess($ip, $country, $asn, true, '', $userAgent);
         }
@@ -670,6 +682,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      * Show JS Challenge page
      */
     protected function showJSChallenge($ip, $userAgent = '') {
+        $this->recordTrafficHistory($ip, null, null, false, 'js-challenge', $userAgent);
         if ($this->enable_stats_logging) {
             $this->logAccess($ip, null, null, false, 'js-challenge', $userAgent);
         }
@@ -2095,6 +2108,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      * Block access and show block page/redirect/404
      */
     protected function blockAccess($reason, $ip, $country, $asn, $userAgent = '') {
+        $this->recordTrafficHistory($ip, $country, $asn, false, $reason, $userAgent);
         if ($this->enable_stats_logging) {
             $this->logAccess($ip, $country, $asn, false, $reason, $userAgent);
         }
@@ -2373,6 +2387,86 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     }
 
     /**
+     * Store AI-friendly request history outside ProcessWire logs.
+     *
+     * Writes one JSON object per line to:
+     * /site/assets/WireWall/traffic/traffic-YYYY-MM-DD.jsonl
+     */
+    protected function recordTrafficHistory($ip, $country, $asn, $allowed, $reason, $userAgent = '') {
+        if (!($this->enable_traffic_history ?? true)) {
+            return;
+        }
+
+        $dir = $this->getTrafficHistoryPath();
+        if (!is_dir($dir) && !@mkdir($dir, 0755, true)) {
+            return;
+        }
+
+        $this->protectTrafficHistoryDirectory($dir);
+
+        $requestUri = $_SERVER['REQUEST_URI'] ?? '';
+        $path = parse_url($requestUri, PHP_URL_PATH) ?: '';
+        $query = parse_url($requestUri, PHP_URL_QUERY) ?: '';
+        $host = $_SERVER['HTTP_HOST'] ?? ($this->wire('config')->httpHost ?? '');
+        $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+
+        $cityData = null;
+        if ($this->geoipCityReader) {
+            $cityData = $this->getCityData($ip);
+        }
+
+        $record = [
+            'schema' => 'wirewall_traffic_v1',
+            'time' => date('c'),
+            'unix_time' => time(),
+            'status' => $allowed ? 'allowed' : 'blocked',
+            'reason' => (string)$reason,
+            'ip' => (string)$ip,
+            'country' => $country ?: null,
+            'city' => $cityData['city'] ?? null,
+            'region' => $cityData['region'] ?? null,
+            'asn' => $asn ?: null,
+            'method' => $_SERVER['REQUEST_METHOD'] ?? '',
+            'host' => (string)$host,
+            'path' => $path,
+            'query' => $query,
+            'url' => $host ? "{$scheme}://{$host}{$requestUri}" : $requestUri,
+            'referer' => $_SERVER['HTTP_REFERER'] ?? '',
+            'user_agent' => (string)$userAgent,
+            'accept' => $_SERVER['HTTP_ACCEPT'] ?? '',
+            'accept_language' => $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '',
+            'sec_fetch_site' => $_SERVER['HTTP_SEC_FETCH_SITE'] ?? '',
+            'sec_fetch_mode' => $_SERVER['HTTP_SEC_FETCH_MODE'] ?? '',
+            'x_requested_with' => $_SERVER['HTTP_X_REQUESTED_WITH'] ?? '',
+            'remote_addr' => $_SERVER['REMOTE_ADDR'] ?? '',
+            'forwarded_for' => $_SERVER['HTTP_X_FORWARDED_FOR'] ?? '',
+        ];
+
+        $json = json_encode($record, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if ($json === false) {
+            return;
+        }
+
+        $file = $dir . 'traffic-' . date('Y-m-d') . '.jsonl';
+        @file_put_contents($file, $json . "\n", FILE_APPEND | LOCK_EX);
+    }
+
+    /**
+     * Prevent direct web reads from the traffic history directory when possible.
+     */
+    protected function protectTrafficHistoryDirectory($dir) {
+        $htaccess = $dir . '.htaccess';
+        if (!file_exists($htaccess)) {
+            @file_put_contents($htaccess, "Require all denied\nDeny from all\n", LOCK_EX);
+        }
+
+        $index = $dir . 'index.php';
+        if (!file_exists($index)) {
+            @file_put_contents($index, "<?php namespace ProcessWire; http_response_code(403); exit;\n", LOCK_EX);
+        }
+    }
+
+    /**
      * Log access for statistics
      */
     protected function logAccess($ip, $country, $asn, $allowed, $reason, $userAgent = '') {
@@ -2493,6 +2587,14 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f->description = 'Log all blocked and allowed requests';
         $f->notes = 'View logs: Admin → Setup → Logs → wirewall';
         $f->checked = isset($data['enable_stats_logging']) && $data['enable_stats_logging'] ? 'checked' : '';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->name = 'enable_traffic_history';
+        $f->label = 'Save Traffic History';
+        $f->description = 'Save allowed and blocked public requests as daily JSONL files for later AI analysis.';
+        $f->notes = 'Stored outside ProcessWire logs: /site/assets/WireWall/traffic/traffic-YYYY-MM-DD.jsonl';
+        $f->checked = (!isset($data['enable_traffic_history']) || $data['enable_traffic_history']) ? 'checked' : '';
         $fieldset->add($f);
 
         $f = $modules->get('InputfieldRadios');

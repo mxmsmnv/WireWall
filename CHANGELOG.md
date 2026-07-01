@@ -4,6 +4,22 @@ All notable changes to WireWall are documented here.
 
 ---
 
+## 1.6.0 — July 1, 2026
+
+### New Features
+
+- Added AI-friendly traffic history as daily JSONL files in `/site/assets/WireWall/traffic/`.
+- Added `Save Traffic History` configuration, enabled by default for public allowed and blocked requests.
+- Added traffic history status to the WireWall dashboard.
+- Added `AGENTS.md` with Olivia/AI guidance, safe operations, risky operations, configuration keys, Blueprint guidance, and versioning rules.
+
+### Improvements
+
+- Redesigned the WireWall dashboard UI with a clearer status header, KPI metrics, responsive panels, improved lists, and a more readable recent-events table.
+- Documented traffic history usage in `README.md`.
+
+---
+
 ## 1.5.0 — June 7, 2026
 
 ### New Features

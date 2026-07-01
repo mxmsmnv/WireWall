@@ -6,8 +6,9 @@
 
 ![WireWall](assets/WireWall.png)
 
-If this project helps your work, consider supporting future development: [GitHub Sponsors](https://github.com/sponsors/mxmsmnv) or [smnv.org/sponsor](https://smnv.org/sponsor/).  
-**Version:** 1.5.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
+If this project helps your work, consider supporting future development: [GitHub Sponsors](https://github.com/sponsors/mxmsmnv) or [smnv.org/sponsor](https://smnv.org/sponsor/).
+
+**Version:** 1.6.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
 
 Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection, rate limiting, VPN/Proxy/Tor detection, JS challenge, and a real-time admin dashboard.
 
@@ -43,6 +44,7 @@ Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection,
 
 ### Dashboard
 - **Real-time statistics** — blocked/allowed counts, block rate, unique IPs, active bans, cache size
+- **Traffic history for AI analysis** — daily JSONL files with allowed/blocked requests, URL, referer, UA, country, ASN, and decision reason
 - **Hourly chart** — blocked requests over last 24 hours (Chart.js)
 - **Top reasons, countries, IPs** — bar charts with counts
 - **Active bans** — live list with TTL countdown
@@ -169,10 +171,24 @@ composer require geoip2/geoip2
 │   ├── GeoLite2-Country.mmdb
 │   ├── GeoLite2-ASN.mmdb
 │   └── GeoLite2-City.mmdb       optional
+├── traffic/
+│   └── traffic-YYYY-MM-DD.jsonl AI-friendly request history
 ├── vendor/                      Composer dependencies
 ├── composer.json
 └── composer.lock
 ```
+
+## Traffic History
+
+Enable **Save Traffic History** in `Admin → Modules → WireWall → Configure`.
+
+WireWall writes one JSON object per request to daily files:
+
+```text
+/site/assets/WireWall/traffic/traffic-YYYY-MM-DD.jsonl
+```
+
+This is separate from the ProcessWire log and is designed for later traffic analysis. Each row includes time, allow/block status, reason, IP, country, city/region when available, ASN, method, URL path/query, referer, User-Agent, and selected browser headers. Admin pages, logged-in users, CLI requests, and trusted module/API bypasses are not recorded.
 
 ---
 

@@ -9,7 +9,7 @@
  * Install: place ProcessWireWall.module.php in /site/modules/WireWall/
  * The module registers a page at Admin > Setup > WireWall
  *
- * @version 1.0.0
+ * @version 1.6.0
  * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @requires WireWall, ProcessWire>=3.0.200, PHP>=8.1
  */
@@ -19,7 +19,7 @@ class ProcessWireWall extends Process implements Module {
         return [
             'title'       => 'WireWall Dashboard',
             'summary'     => 'Firewall statistics and live event log',
-            'version'     => 100,
+            'version'     => 160,
             'author'      => 'Maxim Semenov',
             'href'     => 'https://smnv.org',
             'icon'        => 'shield',
@@ -46,6 +46,10 @@ class ProcessWireWall extends Process implements Module {
 
     protected function getCacheDir(): string {
         return $this->wire('config')->paths->cache . 'WireWall/';
+    }
+
+    protected function getTrafficHistoryDir(): string {
+        return $this->wire('config')->paths->assets . 'WireWall/traffic/';
     }
 
     // -------------------------------------------------------------------------
@@ -188,6 +192,25 @@ class ProcessWireWall extends Process implements Module {
         return $stats;
     }
 
+    protected function getTrafficHistoryStats(): array {
+        $dir = $this->getTrafficHistoryDir();
+        $stats = ['files' => 0, 'size' => 0, 'latest' => ''];
+        if (!is_dir($dir)) return $stats;
+
+        foreach (scandir($dir) as $file) {
+            if (!preg_match('/^traffic-\d{4}-\d{2}-\d{2}\.jsonl$/', $file)) continue;
+            $path = $dir . $file;
+            if (!is_file($path)) continue;
+            $stats['files']++;
+            $stats['size'] += filesize($path);
+            if ($stats['latest'] === '' || $file > $stats['latest']) {
+                $stats['latest'] = $file;
+            }
+        }
+
+        return $stats;
+    }
+
     // -------------------------------------------------------------------------
     // Statistics aggregation
     // -------------------------------------------------------------------------
@@ -260,6 +283,7 @@ class ProcessWireWall extends Process implements Module {
         $stats      = $this->buildStats($lines);
         $bans       = $this->getActiveBans();
         $cacheStats = $this->getCacheStats();
+        $trafficStats = $this->getTrafficHistoryStats();
 
         $sizeFormatted = $cacheStats['size'] > 1048576
             ? round($cacheStats['size'] / 1048576, 1) . ' MB'
@@ -275,9 +299,21 @@ class ProcessWireWall extends Process implements Module {
             $hourData[]   = $stats['byHour'][$h];
         }
 
-        $logEnabled = (bool)($this->wire('modules')->getModuleConfigData('WireWall')['enable_stats_logging'] ?? 0);
+        $wireWallConfig = $this->wire('modules')->getModuleConfigData('WireWall');
+        $wireWallEnabled = (bool)($wireWallConfig['enabled'] ?? 0);
+        $logEnabled = (bool)($wireWallConfig['enable_stats_logging'] ?? 0);
+        $trafficHistoryEnabled = !array_key_exists('enable_traffic_history', $wireWallConfig) || (bool)$wireWallConfig['enable_traffic_history'];
         $adminUrl   = $this->wire('config')->urls->admin;
         $pageUrl    = $this->wire('page')->url;
+        $trafficDir = $this->getTrafficHistoryDir();
+        $trafficSizeFormatted = $trafficStats['size'] > 1048576
+            ? round($trafficStats['size'] / 1048576, 1) . ' MB'
+            : round($trafficStats['size'] / 1024, 1) . ' KB';
+        $lastEventTime = !empty($stats['recent']) && !empty($stats['recent'][0]['time'])
+            ? date('M d H:i', $stats['recent'][0]['time'])
+            : 'No events yet';
+        $protectionLabel = $wireWallEnabled ? 'Protection active' : 'Protection paused';
+        $protectionClass = $wireWallEnabled ? 'is-good' : 'is-warn';
 
         $formatTTL = fn(int $s) => $this->formatTTL($s);
 
@@ -286,352 +322,647 @@ class ProcessWireWall extends Process implements Module {
 ?>
 <style>
 /* WireWall Dashboard */
-.ww-dash .uk-card-header {
-    padding: 12px 15px;
-}
-.ww-dash .uk-card-body {
-    padding: 15px;
-}
-.ww-dash .uk-card-small.uk-card-body {
-    padding: 15px;
-}
-.ww-val {
-    font-size: 2rem;
-    font-weight: 700;
-    line-height: 1;
+.ww-dash {
+    --ww-red: #dc2626;
+    --ww-green: #16a34a;
+    --ww-amber: #d97706;
+    --ww-blue: #2563eb;
+    --ww-violet: #7c3aed;
+    --ww-panel: var(--pw-blocks-background);
+    --ww-border: var(--pw-border-color);
     color: var(--pw-text-color);
-    letter-spacing: -0.02em;
 }
-.ww-accent {
-    width: 28px;
-    height: 3px;
-    border-radius: 2px;
-    margin-bottom: 10px;
+.ww-dash * { box-sizing: border-box; }
+.ww-shell {
+    display: grid;
+    gap: 14px;
+}
+.ww-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 16px;
+    border: 1px solid var(--ww-border);
+    border-radius: 6px;
+    background: var(--ww-panel);
+}
+.ww-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+.ww-mark {
+    width: 36px;
+    height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 36px;
+    border-radius: 6px;
+    color: #fff;
+    background: var(--ww-red);
+}
+.ww-title h2 {
+    margin: 0;
+    font-size: 20px;
+    line-height: 1.2;
+    letter-spacing: 0;
+}
+.ww-subline {
+    margin: 3px 0 0;
+    color: var(--pw-muted-color);
+    font-size: 12px;
+}
+.ww-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+}
+.ww-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 6px 10px;
+    border: 1px solid var(--ww-border);
+    border-radius: 6px;
+    background: var(--pw-inputs-background);
+    color: var(--pw-text-color);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
+    text-decoration: none;
+}
+.ww-btn:hover {
+    color: var(--pw-text-color);
+    border-color: var(--pw-main-color);
+    text-decoration: none;
+}
+.ww-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 26px;
+    padding: 4px 8px;
+    border: 1px solid var(--ww-border);
+    border-radius: 999px;
+    background: var(--pw-inputs-background);
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.ww-pill:before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+}
+.ww-pill.is-good { color: var(--ww-green); }
+.ww-pill.is-warn { color: var(--ww-amber); }
+.ww-pill.is-bad { color: var(--ww-red); }
+.ww-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 11px 12px;
+    border: 1px solid var(--ww-border);
+    border-left: 4px solid var(--ww-blue);
+    border-radius: 6px;
+    background: var(--ww-panel);
+    font-size: 12px;
+}
+.ww-notice.is-warning { border-left-color: var(--ww-amber); }
+.ww-notice code {
+    white-space: normal;
+    word-break: break-word;
+}
+.ww-metrics {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(140px, 1fr));
+    gap: 10px;
+}
+.ww-metric {
+    min-height: 116px;
+    padding: 14px;
+    border: 1px solid var(--ww-border);
+    border-radius: 6px;
+    background: var(--ww-panel);
+}
+.ww-metric-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 12px;
 }
 .ww-head {
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: .1em;
-    text-transform: uppercase;
-    color: var(--pw-muted-color);
     margin: 0;
+    color: var(--pw-muted-color);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    line-height: 1.2;
+    text-transform: uppercase;
 }
-.ww-chart { position: relative; height: 190px; }
-.ww-scroll { max-height: 420px; overflow: auto; }
+.ww-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    flex: 0 0 26px;
+    border-radius: 6px;
+    color: #fff;
+}
+.ww-icon.is-red { background: var(--ww-red); }
+.ww-icon.is-green { background: var(--ww-green); }
+.ww-icon.is-amber { background: var(--ww-amber); }
+.ww-icon.is-blue { background: var(--ww-blue); }
+.ww-icon.is-violet { background: var(--ww-violet); }
+.ww-val {
+    color: var(--pw-text-color);
+    font-size: 30px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: 0;
+}
+.ww-meta {
+    margin: 8px 0 0;
+    color: var(--pw-muted-color);
+    font-size: 12px;
+    line-height: 1.35;
+}
+.ww-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+    gap: 12px;
+}
+.ww-grid-2 {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+.ww-panel {
+    border: 1px solid var(--ww-border);
+    border-radius: 6px;
+    background: var(--ww-panel);
+    overflow: hidden;
+}
+.ww-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--ww-border);
+}
+.ww-panel-body {
+    padding: 14px;
+}
+.ww-chart {
+    position: relative;
+    height: 230px;
+}
+.ww-scroll {
+    max-height: 460px;
+    overflow: auto;
+}
+.ww-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.ww-list li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 32px;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--ww-border);
+}
+.ww-list li:last-child { border-bottom: 0; }
+.ww-list-label {
+    flex: 0 0 138px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--pw-text-color);
+    font-size: 12px;
+    font-weight: 600;
+}
+.ww-list-label.is-code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+}
 .ww-bar-wrap {
     display: block;
-    height: 4px;
-    border-radius: 2px;
-    background: var(--pw-border-color);
-    overflow: hidden;
-    flex: 1;
+    height: 6px;
     min-width: 0;
+    flex: 1;
+    border-radius: 999px;
+    background: var(--pw-inputs-background);
+    overflow: hidden;
 }
 .ww-bar-fill {
     display: block;
     height: 100%;
-    border-radius: 2px;
+    border-radius: 999px;
+}
+.ww-count {
+    flex: 0 0 44px;
+    color: var(--pw-muted-color);
+    font-size: 11px;
+    font-weight: 800;
+    text-align: right;
+}
+.ww-empty {
+    margin: 0;
+    padding: 30px 0;
+    color: var(--pw-muted-color);
+    font-size: 12px;
+    text-align: center;
 }
 .ww-ttl {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: rgba(220, 38, 38, 0.1);
+    color: var(--ww-red);
     font-size: 10px;
-    font-weight: 700;
-    padding: 1px 6px;
-    border-radius: 3px;
-    background: var(--pw-alert-danger);
-    color: var(--pw-text-color);
+    font-weight: 800;
     white-space: nowrap;
 }
-.ww-reason-tag {
-    display: inline-block;
-    font-size: 10px;
-    font-weight: 600;
-    padding: 1px 6px;
-    border-radius: 3px;
+.ww-reason-tag,
+.ww-status {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--ww-border);
     background: var(--pw-inputs-background);
-    border: 1px solid var(--pw-border-color);
     color: var(--pw-text-color);
+    font-size: 10px;
+    font-weight: 800;
+    white-space: nowrap;
+}
+.ww-status.is-blocked {
+    border-color: rgba(220, 38, 38, 0.45);
+    color: var(--ww-red);
+}
+.ww-status.is-allowed {
+    border-color: rgba(22, 163, 74, 0.45);
+    color: var(--ww-green);
+}
+.ww-table {
+    width: 100%;
+    margin: 0;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+.ww-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 9px 10px;
+    border-bottom: 1px solid var(--ww-border);
+    background: var(--ww-panel);
+    color: var(--pw-muted-color);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-align: left;
+    text-transform: uppercase;
+}
+.ww-table td {
+    padding: 9px 10px;
+    border-bottom: 1px solid var(--ww-border);
+    color: var(--pw-text-color);
+    font-size: 12px;
+    vertical-align: middle;
+}
+.ww-table tr:hover td {
+    background: rgba(37, 99, 235, 0.04);
+}
+.ww-truncate {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ww-code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+}
+@media (max-width: 1180px) {
+    .ww-metrics { grid-template-columns: repeat(3, minmax(150px, 1fr)); }
+    .ww-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 760px) {
+    .ww-topbar { align-items: flex-start; flex-direction: column; }
+    .ww-actions { justify-content: flex-start; }
+    .ww-metrics,
+    .ww-grid-2 { grid-template-columns: 1fr; }
+    .ww-list-label { flex-basis: 110px; }
+    .ww-table { min-width: 820px; }
 }
 </style>
 
 <div class="ww-dash">
+<div class="ww-shell">
 
-<?php if (!$logEnabled): ?>
-<div class="uk-alert uk-alert-warning" uk-alert>
-    <a class="uk-alert-close" uk-close></a>
-    <p><span uk-icon="icon:warning;ratio:0.9" class="uk-margin-small-right"></span><strong>Logging is disabled.</strong> Enable <em>Enable Logging</em> in <a href="<?= $adminUrl ?>module/edit?name=WireWall">WireWall settings</a> to populate the dashboard.</p>
-</div>
-<?php endif; ?>
-
-<!-- Stat cards -->
-<div class="uk-grid-small uk-child-width-1-5@l uk-child-width-1-3@m uk-child-width-1-2 uk-margin-medium-bottom" uk-grid>
-
-    <div><div class="uk-card uk-card-default uk-card-small uk-card-body">
-        <div class="ww-accent" style="background:var(--pw-error-inline-text-color)"></div>
-        <p class="ww-head uk-margin-small-bottom">Blocked</p>
-        <div class="ww-val"><?= number_format($stats['blocked']) ?></div>
-        <p class="uk-text-meta uk-margin-small-top"><?= $stats['blockRate'] ?>% block rate</p>
-    </div></div>
-
-    <div><div class="uk-card uk-card-default uk-card-small uk-card-body">
-        <div class="ww-accent" style="background:var(--pw-alert-success)"></div>
-        <p class="ww-head uk-margin-small-bottom">Allowed</p>
-        <div class="ww-val"><?= number_format($stats['allowed']) ?></div>
-        <p class="uk-text-meta uk-margin-small-top">of <?= number_format($stats['total']) ?> requests</p>
-    </div></div>
-
-    <div><div class="uk-card uk-card-default uk-card-small uk-card-body">
-        <div class="ww-accent" style="background:#f59e0b"></div>
-        <p class="ww-head uk-margin-small-bottom">Unique IPs blocked</p>
-        <div class="ww-val"><?= number_format($stats['uniqueIPs']) ?></div>
-        <p class="uk-text-meta uk-margin-small-top">across <?= number_format($stats['total']) ?> requests</p>
-    </div></div>
-
-    <div><div class="uk-card uk-card-default uk-card-small uk-card-body">
-        <div class="ww-accent" style="background:#8b5cf6"></div>
-        <p class="ww-head uk-margin-small-bottom">Active Bans</p>
-        <div class="ww-val"><?= count($bans) ?></div>
-        <p class="uk-text-meta uk-margin-small-top"><?= $cacheStats['ratelimit'] ?> rate limit counters</p>
-    </div></div>
-
-    <div><div class="uk-card uk-card-default uk-card-small uk-card-body">
-        <div class="ww-accent" style="background:var(--pw-main-color)"></div>
-        <p class="ww-head uk-margin-small-bottom">Cache files</p>
-        <div class="ww-val"><?= $cacheStats['total'] ?></div>
-        <p class="uk-text-meta uk-margin-small-top"><?= $sizeFormatted ?> on disk</p>
-    </div></div>
-
-</div>
-
-<!-- Row 1: Chart + Bans -->
-<div class="uk-grid-small uk-margin-medium-bottom uk-grid-match" uk-grid>
-
-    <div class="uk-width-2-3@m">
-        <div class="uk-card uk-card-default">
-            <div class="uk-card-header">
-                <p class="ww-head"><span uk-icon="icon:clock;ratio:0.75" class="uk-margin-small-right"></span>Blocked requests — last 24 hours</p>
+    <div class="ww-topbar">
+        <div class="ww-title">
+            <span class="ww-mark" uk-icon="icon:shield;ratio:1.05"></span>
+            <div>
+                <h2>WireWall</h2>
+                <p class="ww-subline">Last event: <?= htmlspecialchars($lastEventTime) ?> · <?= number_format($stats['total']) ?> recent requests indexed</p>
             </div>
-            <div class="uk-card-body">
-                <div class="ww-chart"><canvas id="ww-chart-hourly"></canvas></div>
-            </div>
+        </div>
+        <div class="ww-actions">
+            <span class="ww-pill <?= $protectionClass ?>"><?= htmlspecialchars($protectionLabel) ?></span>
+            <span class="ww-pill <?= $logEnabled ? 'is-good' : 'is-warn' ?>"><?= $logEnabled ? 'Logging on' : 'Logging off' ?></span>
+            <a class="ww-btn" href="<?= $pageUrl ?>" title="Refresh dashboard">
+                <span uk-icon="icon:refresh;ratio:0.8"></span>Refresh
+            </a>
+            <a class="ww-btn" href="<?= $adminUrl ?>module/edit?name=WireWall" title="Open WireWall settings">
+                <span uk-icon="icon:cog;ratio:0.8"></span>Settings
+            </a>
         </div>
     </div>
 
-    <div class="uk-width-1-3@m">
-        <div class="uk-card uk-card-default">
-            <div class="uk-card-header uk-flex uk-flex-between uk-flex-middle">
-                <p class="ww-head"><span uk-icon="icon:ban;ratio:0.75" class="uk-margin-small-right"></span>Active Bans</p>
-                <span class="uk-badge"><?= count($bans) ?></span>
+    <?php if (!$logEnabled): ?>
+    <div class="ww-notice is-warning">
+        <span uk-icon="icon:warning;ratio:0.9"></span>
+        <div><strong>Logging is disabled.</strong> Enable logging in WireWall settings to populate dashboard events and charts.</div>
+    </div>
+    <?php endif; ?>
+
+    <?php if ($trafficHistoryEnabled): ?>
+    <div class="ww-notice">
+        <span uk-icon="icon:download;ratio:0.9"></span>
+        <div>
+            <strong>Traffic history:</strong>
+            <?= number_format($trafficStats['files']) ?> JSONL files, <?= $trafficSizeFormatted ?>.
+            Latest: <code><?= htmlspecialchars($trafficStats['latest'] ?: 'not created yet') ?></code>.
+            Path: <code><?= htmlspecialchars($trafficDir) ?></code>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <div class="ww-metrics">
+        <div class="ww-metric">
+            <div class="ww-metric-top">
+                <p class="ww-head">Blocked</p>
+                <span class="ww-icon is-red" uk-icon="icon:ban;ratio:0.75"></span>
             </div>
-            <div class="uk-card-body uk-padding-small">
+            <div class="ww-val"><?= number_format($stats['blocked']) ?></div>
+            <p class="ww-meta"><?= $stats['blockRate'] ?>% block rate</p>
+        </div>
+
+        <div class="ww-metric">
+            <div class="ww-metric-top">
+                <p class="ww-head">Allowed</p>
+                <span class="ww-icon is-green" uk-icon="icon:check;ratio:0.75"></span>
+            </div>
+            <div class="ww-val"><?= number_format($stats['allowed']) ?></div>
+            <p class="ww-meta">of <?= number_format($stats['total']) ?> requests</p>
+        </div>
+
+        <div class="ww-metric">
+            <div class="ww-metric-top">
+                <p class="ww-head">Blocked IPs</p>
+                <span class="ww-icon is-amber" uk-icon="icon:warning;ratio:0.75"></span>
+            </div>
+            <div class="ww-val"><?= number_format($stats['uniqueIPs']) ?></div>
+            <p class="ww-meta">unique sources</p>
+        </div>
+
+        <div class="ww-metric">
+            <div class="ww-metric-top">
+                <p class="ww-head">Active Bans</p>
+                <span class="ww-icon is-violet" uk-icon="icon:lock;ratio:0.75"></span>
+            </div>
+            <div class="ww-val"><?= count($bans) ?></div>
+            <p class="ww-meta"><?= number_format($cacheStats['ratelimit']) ?> rate counters</p>
+        </div>
+
+        <div class="ww-metric">
+            <div class="ww-metric-top">
+                <p class="ww-head">Cache</p>
+                <span class="ww-icon is-blue" uk-icon="icon:database;ratio:0.75"></span>
+            </div>
+            <div class="ww-val"><?= number_format($cacheStats['total']) ?></div>
+            <p class="ww-meta"><?= $sizeFormatted ?> on disk</p>
+        </div>
+    </div>
+
+    <div class="ww-grid">
+        <section class="ww-panel">
+            <div class="ww-panel-head">
+                <p class="ww-head"><span uk-icon="icon:clock;ratio:0.75" class="uk-margin-small-right"></span>Blocked requests - last 24 hours</p>
+                <span class="ww-pill is-bad"><?= number_format(array_sum($hourData)) ?> hits</span>
+            </div>
+            <div class="ww-panel-body">
+                <div class="ww-chart"><canvas id="ww-chart-hourly"></canvas></div>
+            </div>
+        </section>
+
+        <section class="ww-panel">
+            <div class="ww-panel-head">
+                <p class="ww-head"><span uk-icon="icon:lock;ratio:0.75" class="uk-margin-small-right"></span>Active bans</p>
+                <span class="ww-pill <?= count($bans) ? 'is-bad' : 'is-good' ?>"><?= count($bans) ?></span>
+            </div>
+            <div class="ww-panel-body">
             <?php if (empty($bans)): ?>
-                <p class="uk-text-muted uk-text-small uk-text-center uk-margin-remove" style="padding:32px 0">
-                    <span uk-icon="icon:check;ratio:1" class="uk-display-block uk-margin-small-bottom"></span>No active bans
-                </p>
+                <p class="ww-empty"><span uk-icon="icon:check;ratio:1"></span><br>No active bans</p>
             <?php else: ?>
-                <ul class="uk-list uk-list-divider uk-margin-remove uk-text-small">
+                <ul class="ww-list">
                 <?php foreach (array_slice($bans, 0, 14) as $ban): ?>
-                <li class="uk-flex uk-flex-between uk-flex-middle">
-                    <code style="font-size:11px"><?= htmlspecialchars($ban['ip']) ?></code>
-                    <span class="ww-ttl"><?= $formatTTL($ban['ttl']) ?></span>
-                </li>
+                    <li>
+                        <span class="ww-list-label is-code"><?= htmlspecialchars($ban['ip']) ?></span>
+                        <span class="ww-bar-wrap"><span class="ww-bar-fill" style="width:100%;background:var(--ww-red)"></span></span>
+                        <span class="ww-ttl"><?= $formatTTL($ban['ttl']) ?></span>
+                    </li>
                 <?php endforeach; ?>
                 <?php if (count($bans) > 14): ?>
-                <li class="uk-text-muted uk-text-center uk-text-small">+ <?= count($bans) - 14 ?> more</li>
+                    <li><span class="ww-meta">+ <?= count($bans) - 14 ?> more</span></li>
                 <?php endif; ?>
                 </ul>
             <?php endif; ?>
             </div>
-        </div>
+        </section>
     </div>
 
-</div>
-
-<!-- Row 2: Reasons + Countries -->
-<div class="uk-grid-small uk-margin-medium-bottom uk-grid-match" uk-grid>
-
-    <div class="uk-width-1-2@m">
-        <div class="uk-card uk-card-default">
-            <div class="uk-card-header">
-                <p class="ww-head"><span uk-icon="icon:tag;ratio:0.75" class="uk-margin-small-right"></span>Top Block Reasons</p>
+    <div class="ww-grid-2">
+        <section class="ww-panel">
+            <div class="ww-panel-head">
+                <p class="ww-head"><span uk-icon="icon:tag;ratio:0.75" class="uk-margin-small-right"></span>Top block reasons</p>
             </div>
-            <div class="uk-card-body uk-padding-small">
+            <div class="ww-panel-body">
             <?php if (empty($stats['reasons'])): ?>
-                <p class="uk-text-muted uk-text-small uk-text-center" style="padding:24px 0"><em>No data yet</em></p>
+                <p class="ww-empty">No data yet</p>
             <?php else: $maxR = max($stats['reasons']); ?>
-                <ul class="uk-list uk-list-divider uk-margin-remove">
+                <ul class="ww-list">
                 <?php foreach ($stats['reasons'] as $reason => $cnt): ?>
-                <li class="uk-flex uk-flex-middle" style="gap:10px;padding:5px 0">
-                    <span style="flex:0 0 105px;font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                          title="<?= htmlspecialchars($reason) ?>"><?= htmlspecialchars($reason) ?></span>
-                    <span class="ww-bar-wrap">
-                        <span class="ww-bar-fill" style="width:<?= round($cnt/$maxR*100) ?>%;background:var(--pw-error-inline-text-color)"></span>
-                    </span>
-                    <span class="uk-text-muted" style="flex:0 0 32px;text-align:right;font-size:11px;font-weight:600"><?= number_format($cnt) ?></span>
-                </li>
+                    <li>
+                        <span class="ww-list-label" title="<?= htmlspecialchars($reason) ?>"><?= htmlspecialchars($reason) ?></span>
+                        <span class="ww-bar-wrap"><span class="ww-bar-fill" style="width:<?= round($cnt/$maxR*100) ?>%;background:var(--ww-red)"></span></span>
+                        <span class="ww-count"><?= number_format($cnt) ?></span>
+                    </li>
                 <?php endforeach; ?>
                 </ul>
             <?php endif; ?>
             </div>
-        </div>
-    </div>
+        </section>
 
-    <div class="uk-width-1-2@m">
-        <div class="uk-card uk-card-default">
-            <div class="uk-card-header">
-                <p class="ww-head"><span uk-icon="icon:world;ratio:0.75" class="uk-margin-small-right"></span>Top Countries (blocked)</p>
+        <section class="ww-panel">
+            <div class="ww-panel-head">
+                <p class="ww-head"><span uk-icon="icon:world;ratio:0.75" class="uk-margin-small-right"></span>Top countries blocked</p>
             </div>
-            <div class="uk-card-body uk-padding-small">
+            <div class="ww-panel-body">
             <?php if (empty($stats['countries'])): ?>
-                <p class="uk-text-muted uk-text-small uk-text-center" style="padding:24px 0"><em>No data yet</em></p>
+                <p class="ww-empty">No data yet</p>
             <?php else: $maxC = max($stats['countries']); ?>
-                <ul class="uk-list uk-list-divider uk-margin-remove">
+                <ul class="ww-list">
                 <?php foreach ($stats['countries'] as $cc => $cnt): ?>
-                <li class="uk-flex uk-flex-middle" style="gap:10px;padding:5px 0">
-                    <span style="flex:0 0 36px;font-size:12px;font-weight:600"><?= htmlspecialchars($cc) ?></span>
-                    <span class="ww-bar-wrap">
-                        <span class="ww-bar-fill" style="width:<?= round($cnt/$maxC*100) ?>%;background:#6366f1"></span>
-                    </span>
-                    <span class="uk-text-muted" style="flex:0 0 32px;text-align:right;font-size:11px;font-weight:600"><?= number_format($cnt) ?></span>
-                </li>
+                    <li>
+                        <span class="ww-list-label" title="<?= htmlspecialchars($cc) ?>"><?= htmlspecialchars($cc) ?></span>
+                        <span class="ww-bar-wrap"><span class="ww-bar-fill" style="width:<?= round($cnt/$maxC*100) ?>%;background:var(--ww-blue)"></span></span>
+                        <span class="ww-count"><?= number_format($cnt) ?></span>
+                    </li>
                 <?php endforeach; ?>
                 </ul>
             <?php endif; ?>
             </div>
-        </div>
+        </section>
     </div>
 
-</div>
-
-<!-- Row 3: IPs + Cache -->
-<div class="uk-grid-small uk-margin-medium-bottom uk-grid-match" uk-grid>
-
-    <div class="uk-width-1-2@m">
-        <div class="uk-card uk-card-default">
-            <div class="uk-card-header">
-                <p class="ww-head"><span uk-icon="icon:warning;ratio:0.75" class="uk-margin-small-right"></span>Top Blocked IPs</p>
+    <div class="ww-grid-2">
+        <section class="ww-panel">
+            <div class="ww-panel-head">
+                <p class="ww-head"><span uk-icon="icon:warning;ratio:0.75" class="uk-margin-small-right"></span>Top blocked IPs</p>
             </div>
-            <div class="uk-card-body uk-padding-small">
+            <div class="ww-panel-body">
             <?php if (empty($stats['topIPs'])): ?>
-                <p class="uk-text-muted uk-text-small uk-text-center" style="padding:24px 0"><em>No data yet</em></p>
+                <p class="ww-empty">No data yet</p>
             <?php else: $maxI = max($stats['topIPs']); ?>
-                <ul class="uk-list uk-list-divider uk-margin-remove">
+                <ul class="ww-list">
                 <?php foreach ($stats['topIPs'] as $ip => $cnt): ?>
-                <li class="uk-flex uk-flex-middle" style="gap:10px;padding:5px 0">
-                    <span style="flex:0 0 120px;font-size:11px;font-family:monospace;color:var(--pw-text-color)"><?= htmlspecialchars($ip) ?></span>
-                    <span class="ww-bar-wrap">
-                        <span class="ww-bar-fill" style="width:<?= round($cnt/$maxI*100) ?>%;background:#f59e0b"></span>
-                    </span>
-                    <span class="uk-text-muted" style="flex:0 0 32px;text-align:right;font-size:11px;font-weight:600"><?= number_format($cnt) ?></span>
-                </li>
+                    <li>
+                        <span class="ww-list-label is-code" title="<?= htmlspecialchars($ip) ?>"><?= htmlspecialchars($ip) ?></span>
+                        <span class="ww-bar-wrap"><span class="ww-bar-fill" style="width:<?= round($cnt/$maxI*100) ?>%;background:var(--ww-amber)"></span></span>
+                        <span class="ww-count"><?= number_format($cnt) ?></span>
+                    </li>
                 <?php endforeach; ?>
                 </ul>
             <?php endif; ?>
             </div>
-        </div>
-    </div>
+        </section>
 
-    <div class="uk-width-1-2@m">
-        <div class="uk-card uk-card-default">
-            <div class="uk-card-header">
-                <p class="ww-head"><span uk-icon="icon:database;ratio:0.75" class="uk-margin-small-right"></span>Cache Breakdown</p>
+        <section class="ww-panel">
+            <div class="ww-panel-head">
+                <p class="ww-head"><span uk-icon="icon:database;ratio:0.75" class="uk-margin-small-right"></span>Cache breakdown</p>
+                <a class="ww-btn" href="<?= $adminUrl ?>module/edit?name=WireWall" title="Manage cache">
+                    <span uk-icon="icon:cog;ratio:0.75"></span>Manage
+                </a>
             </div>
-            <div class="uk-card-body uk-padding-small">
+            <div class="ww-panel-body">
             <?php
             $cacheRows = [
-                ['Rate Limit Counters', $cacheStats['ratelimit'], '#f59e0b'],
-                ['Active Bans',         $cacheStats['ban'],       'var(--pw-error-inline-text-color)'],
-                ['Proxy Detection',     $cacheStats['proxy'],     '#8b5cf6'],
-                ['GeoIP Lookups',       $cacheStats['geo'],       'var(--pw-main-color)'],
+                ['Rate limit counters', $cacheStats['ratelimit'], 'var(--ww-amber)'],
+                ['Active bans',         $cacheStats['ban'],       'var(--ww-red)'],
+                ['Proxy detection',     $cacheStats['proxy'],     'var(--ww-violet)'],
+                ['GeoIP lookups',       $cacheStats['geo'],       'var(--ww-blue)'],
             ];
             $maxCV = max(array_column($cacheRows, 1) ?: [1]);
             ?>
-            <ul class="uk-list uk-list-divider uk-margin-remove">
-            <?php foreach ($cacheRows as [$label, $val, $color]): ?>
-            <li class="uk-flex uk-flex-middle" style="gap:10px;padding:5px 0">
-                <span style="flex:0 0 145px;font-size:12px"><?= $label ?></span>
-                <span class="ww-bar-wrap">
-                    <span class="ww-bar-fill" style="width:<?= $maxCV > 0 ? round($val/$maxCV*100) : 0 ?>%;background:<?= $color ?>"></span>
-                </span>
-                <span class="uk-text-muted" style="flex:0 0 32px;text-align:right;font-size:11px;font-weight:600"><?= number_format($val) ?></span>
-            </li>
-            <?php endforeach; ?>
-            </ul>
-            <p class="uk-text-small uk-text-muted uk-margin-small-top">
-                <?= number_format($cacheStats['total']) ?> files &bull; <?= $sizeFormatted ?>
-                &bull; <a href="<?= $adminUrl ?>module/edit?name=WireWall" class="uk-link-muted">Manage cache &rarr;</a>
-            </p>
+                <ul class="ww-list">
+                <?php foreach ($cacheRows as [$label, $val, $color]): ?>
+                    <li>
+                        <span class="ww-list-label"><?= htmlspecialchars($label) ?></span>
+                        <span class="ww-bar-wrap"><span class="ww-bar-fill" style="width:<?= $maxCV > 0 ? round($val/$maxCV*100) : 0 ?>%;background:<?= $color ?>"></span></span>
+                        <span class="ww-count"><?= number_format($val) ?></span>
+                    </li>
+                <?php endforeach; ?>
+                </ul>
+                <p class="ww-meta"><?= number_format($cacheStats['total']) ?> files · <?= $sizeFormatted ?></p>
             </div>
+        </section>
+    </div>
+
+    <section class="ww-panel">
+        <div class="ww-panel-head">
+            <p class="ww-head"><span uk-icon="icon:list;ratio:0.75" class="uk-margin-small-right"></span>Recent events</p>
+            <span class="ww-pill"><?= count($stats['recent']) ?> rows</span>
         </div>
-    </div>
 
-</div>
+        <?php if (empty($stats['recent'])): ?>
+        <div class="ww-panel-body">
+            <p class="ww-empty">No log entries yet</p>
+        </div>
+        <?php else: ?>
+        <div class="ww-scroll">
+            <table class="ww-table">
+                <thead>
+                    <tr>
+                        <th style="width:112px">Time</th>
+                        <th style="width:96px">Status</th>
+                        <th style="width:132px">IP</th>
+                        <th style="width:160px">Country</th>
+                        <th style="width:170px">ASN</th>
+                        <th style="width:132px">Reason</th>
+                        <th>User-Agent</th>
+                    </tr>
+                </thead>
+                <tbody>
+                <?php foreach ($stats['recent'] as $r): ?>
+                    <tr>
+                        <td class="ww-code"><?= $r['time'] ? date('M d H:i:s', $r['time']) : '-' ?></td>
+                        <td>
+                        <?php if ($r['status'] === 'BLOCKED'): ?>
+                            <span class="ww-status is-blocked">Blocked</span>
+                        <?php else: ?>
+                            <span class="ww-status is-allowed">Allowed</span>
+                        <?php endif; ?>
+                        </td>
+                        <td><span class="ww-code ww-truncate" title="<?= htmlspecialchars($r['ip']) ?>"><?= htmlspecialchars($r['ip']) ?></span></td>
+                        <td><span class="ww-truncate" title="<?= htmlspecialchars($r['country']) ?>"><?= htmlspecialchars($r['country'] ?: '-') ?></span></td>
+                        <td title="<?= htmlspecialchars($r['asn']) ?>">
+                        <?php if ($r['asn']): preg_match('/^(AS\d+)\s*(.*)/i', $r['asn'], $m); ?>
+                            <span class="ww-code ww-truncate"><?= htmlspecialchars($m[1] ?? $r['asn']) ?></span>
+                            <?php if (!empty($m[2])): ?>
+                            <span class="ww-truncate" style="color:var(--pw-muted-color);font-size:10px"><?= htmlspecialchars($m[2]) ?></span>
+                            <?php endif; ?>
+                        <?php else: ?>
+                            <span style="color:var(--pw-muted-color)">-</span>
+                        <?php endif; ?>
+                        </td>
+                        <td>
+                        <?php if ($r['reason']): ?>
+                            <span class="ww-reason-tag" title="<?= htmlspecialchars($r['reason']) ?>"><?= htmlspecialchars($r['reason']) ?></span>
+                        <?php else: ?>
+                            <span style="color:var(--pw-muted-color)">-</span>
+                        <?php endif; ?>
+                        </td>
+                        <td><span class="ww-truncate" style="color:var(--pw-muted-color);font-size:11px" title="<?= htmlspecialchars($r['ua']) ?>"><?= htmlspecialchars($r['ua'] ?: '-') ?></span></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+        <?php endif; ?>
+    </section>
 
-<!-- Recent Events -->
-<div class="uk-card uk-card-default uk-margin-medium-bottom">
-    <div class="uk-card-header uk-flex uk-flex-between uk-flex-middle">
-        <p class="ww-head">
-            <span uk-icon="icon:list;ratio:0.75" class="uk-margin-small-right"></span>Recent Events
-            <span class="uk-badge uk-margin-small-left"><?= count($stats['recent']) ?></span>
-        </p>
-        <a href="<?= $pageUrl ?>" class="uk-link-muted uk-text-small uk-flex uk-flex-middle" style="gap:4px">
-            <span uk-icon="icon:refresh;ratio:0.8"></span>Refresh
-        </a>
-    </div>
-
-    <?php if (empty($stats['recent'])): ?>
-    <div class="uk-card-body">
-        <p class="uk-text-muted uk-text-center"><em>No log entries. Enable logging in WireWall settings.</em></p>
-    </div>
-    <?php else: ?>
-    <div class="ww-scroll">
-        <table class="uk-table uk-table-divider uk-table-small uk-table-hover" style="margin:0">
-            <thead style="position:sticky;top:0;z-index:1;background:var(--pw-blocks-background)">
-                <tr>
-                    <th style="width:110px">Time</th>
-                    <th style="width:80px">Status</th>
-                    <th style="width:125px">IP</th>
-                    <th style="width:160px">Country</th>
-                    <th style="width:150px">ASN</th>
-                    <th style="width:120px">Reason</th>
-                    <th>User-Agent</th>
-                </tr>
-            </thead>
-            <tbody>
-            <?php foreach ($stats['recent'] as $r): ?>
-            <tr>
-                <td class="uk-text-meta uk-text-nowrap"><?= $r['time'] ? date('M d H:i:s', $r['time']) : '—' ?></td>
-                <td>
-                <?php if ($r['status'] === 'BLOCKED'): ?>
-                    <span class="uk-label uk-label-danger" style="font-size:9px;letter-spacing:.06em">BLOCKED</span>
-                <?php else: ?>
-                    <span class="uk-label uk-label-success" style="font-size:9px;letter-spacing:.06em">ALLOWED</span>
-                <?php endif; ?>
-                </td>
-                <td style="font-family:monospace;font-size:11px;color:var(--pw-text-color)"><?= htmlspecialchars($r['ip']) ?></td>
-                <td class="uk-text-small" style="white-space:nowrap"><?= htmlspecialchars($r['country']) ?></td>
-                <td title="<?= htmlspecialchars($r['asn']) ?>">
-                <?php if ($r['asn']): preg_match('/^(AS\d+)\s*(.*)/i', $r['asn'], $m); ?>
-                    <span style="font-size:11px;font-family:monospace;color:var(--pw-text-color)"><?= htmlspecialchars($m[1] ?? $r['asn']) ?></span>
-                    <?php if (!empty($m[2])): ?>
-                    <br><span class="uk-text-muted" style="font-size:10px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px"><?= htmlspecialchars($m[2]) ?></span>
-                    <?php endif; ?>
-                <?php else: ?><span class="uk-text-muted">—</span><?php endif; ?>
-                </td>
-                <td>
-                <?php if ($r['reason']): ?>
-                    <span class="ww-reason-tag" style="white-space:nowrap"><?= htmlspecialchars($r['reason']) ?></span>
-                <?php else: ?>
-                    <span class="uk-text-muted">—</span>
-                <?php endif; ?>
-                </td>
-                <td class="uk-text-muted uk-text-nowrap" style="font-size:10px;max-width:220px;overflow:hidden;text-overflow:ellipsis"
-                    title="<?= htmlspecialchars($r['ua']) ?>"><?= htmlspecialchars($r['ua']) ?: '—' ?></td>
-            </tr>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
-    </div>
-    <?php endif; ?>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
