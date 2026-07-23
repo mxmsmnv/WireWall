@@ -136,7 +136,9 @@ Exceptions:
 - `compatibilityUserAgents`
 
 `ip_whitelist` is the explicit full-firewall bypass. The `allowed*` fields above
-classify known bots and skip only bot/fake-browser heuristics.
+classify known bots and skip only bot/fake-browser heuristics. Configured
+Googlebot/Bingbot UA rules require cached forward-confirmed reverse DNS before
+they are trusted as UA-only exceptions.
 `compatibilityUserAgents` skips only fake-browser and JavaScript-challenge
 heuristics; all bans, triggers, rate limits, network checks, geo rules, and
 explicit blocks still apply.
@@ -173,11 +175,11 @@ When explaining behavior or debugging blocks, use this high-level order:
 2. Trusted ProcessWire module AJAX/API bypass
 3. Logged-in ProcessWire user bypass
 4. IP whitelist
-5. Classify scoped known-bot and compatibility exceptions
-6. Active temporary ban
-7. URL/User-Agent trigger rules
-8. Rate limiting
-9. IP blacklist
+5. Active temporary ban
+6. URL/User-Agent trigger rules
+7. Rate limiting
+8. IP blacklist
+9. Verify supported crawler identities and classify scoped known-bot / compatibility exceptions
 10. JavaScript challenge
 11. VPN/proxy/Tor detection
 12. Datacenter detection
