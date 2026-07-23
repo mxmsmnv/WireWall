@@ -1,7 +1,7 @@
 <?php namespace ProcessWire;
 
 /**
- * WireWall 1.6.0 - Advanced Traffic Firewall
+ * WireWall 1.6.1 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -13,7 +13,7 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.6.0
+ * @version 1.6.1
  * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @date April 24, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
@@ -25,7 +25,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 160,
+            'version' => 161,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -1545,6 +1545,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             foreach ($allowedAgents as $pattern) {
                 $pattern = trim($pattern);
                 if (empty($pattern)) continue;
+                if ($this->isUnsafeBrowserAllowPattern($pattern)) continue;
                 
                 // Case-insensitive match
                 if (stripos($userAgent, $pattern) !== false) {
@@ -1600,6 +1601,27 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         }
         
         return false;
+    }
+
+    /**
+     * Prevent common browser names from becoming full-firewall bypass rules.
+     *
+     * These values are sometimes added as compatibility workarounds for browser
+     * header quirks, but a browser family name is trivial for bots to spoof.
+     */
+    protected function isUnsafeBrowserAllowPattern($pattern) {
+        $pattern = strtolower(trim((string)$pattern));
+        return in_array($pattern, [
+            'firefox',
+            'brave',
+            'chrome',
+            'chromium',
+            'safari',
+            'edge',
+            'edg',
+            'opera',
+            'opr',
+        ], true);
     }
 
     /**

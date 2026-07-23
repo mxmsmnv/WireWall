@@ -4,6 +4,15 @@ All notable changes to WireWall are documented here.
 
 ---
 
+## 1.6.1 — July 1, 2026
+
+### Bug Fixes
+
+- Prevent common browser family names such as Firefox, Brave, Chrome, Safari, and Edge from becoming full-firewall bypass rules when entered in Allowed User-Agents.
+- Keep browser compatibility workarounds scoped to fake-browser detection instead of allowing spoofable browser User-Agent substrings to skip rate limits, trigger rules, VPN/proxy checks, and other protections.
+
+---
+
 ## 1.6.0 — July 1, 2026
 
 ### New Features
