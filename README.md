@@ -8,7 +8,7 @@
 
 If this project helps your work, consider supporting future development: [GitHub Sponsors](https://github.com/sponsors/mxmsmnv) or [smnv.org/sponsor](https://smnv.org/sponsor/).
 
-**Version:** 1.8.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
+**Version:** 1.8.1 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
 
 Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection, rate limiting, VPN/Proxy/Tor detection, JS challenge, and a real-time admin dashboard.
 
@@ -176,16 +176,18 @@ composer require geoip2/geoip2
 ├── CONFIGURATIONS.md
 └── CHANGELOG.md
 
-/site/assets/WireWall/           Persistent data — survives module updates
+/site/assets/WireWall/           Public-root data — GeoIP/vendor only
 ├── geoip/
 │   ├── GeoLite2-Country.mmdb
 │   ├── GeoLite2-ASN.mmdb
 │   └── GeoLite2-City.mmdb       optional
-├── traffic/
-│   └── traffic-YYYY-MM-DD.jsonl AI-friendly request history
 ├── vendor/                      Composer dependencies
 ├── composer.json
 └── composer.lock
+
+../SITE-DIRECTORY-wirewall-private/  Private data outside document root
+└── traffic/
+    └── traffic-YYYY-MM-DD.jsonl    AI-friendly request history
 ```
 
 ## Traffic History
@@ -195,7 +197,7 @@ Enable **Save Traffic History** in `Admin → Modules → WireWall → Configure
 WireWall writes one JSON object per request to daily files:
 
 ```text
-/site/assets/WireWall/traffic/traffic-YYYY-MM-DD.jsonl
+../SITE-DIRECTORY-wirewall-private/traffic/traffic-YYYY-MM-DD.jsonl
 ```
 
 This is separate from the ProcessWire log and is designed for later traffic analysis. Each row includes time, allow/block status, reason, IP, country, city/region when available, ASN, method, URL path/query, referer, User-Agent, and selected browser headers. Admin pages, logged-in users, CLI requests, and trusted module/API bypasses are not recorded.
@@ -206,8 +208,10 @@ Authorized users can open `Admin → Setup → WireWall` to:
 - create a ZIP for a selected date range;
 - create an AI incident bundle containing redacted settings, traffic, a summary, and handling notes.
 
-The traffic directory denies direct web access. Report routes also require the
-`wirewall-dashboard` permission.
+The traffic directory is outside the document root and its files use private
+filesystem permissions. Report routes require the `wirewall-dashboard`
+permission. Set `$config->wireWallPrivateDataPath` to an absolute path when the
+default sibling directory is not suitable for the host.
 
 ## Settings Storage and Export
 

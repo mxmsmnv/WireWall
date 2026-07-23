@@ -4,6 +4,17 @@ All notable changes to WireWall are documented here.
 
 ---
 
+## 1.8.1 — July 23, 2026
+
+### Security
+
+- Moved traffic history outside the web document root because `.htaccess` protection is not enforced by every Nginx/hosting configuration.
+- Added automatic migration of existing daily JSONL files into a private sibling directory.
+- Restricted private traffic directories to mode `0700` and JSONL files to `0600`.
+- Updated the dashboard to read traffic reports through the firewall's shared private-path API.
+
+---
+
 ## 1.8.0 — July 23, 2026
 
 ### Settings and Migration

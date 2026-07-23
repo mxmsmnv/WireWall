@@ -34,7 +34,7 @@ Persistent runtime data:
 
 - `/site/assets/WireWall/geoip/` - MaxMind databases
 - `/site/assets/WireWall/vendor/` - Composer dependencies for GeoIP
-- `/site/assets/WireWall/traffic/` - daily JSONL traffic history
+- `../SITE-DIRECTORY-wirewall-private/traffic/` - private daily JSONL traffic history outside the document root
 - `/site/assets/cache/WireWall/` - cache, rate limits, bans, proxy/geo lookups
 
 ## How Agents Should Use WireWall When Building A Website
@@ -49,7 +49,7 @@ When building a ProcessWire site:
 4. For custom frontend AJAX endpoints, add their paths to `custom_trusted_paths` if they are POST AJAX endpoints.
 5. For public APIs, webhooks, GraphQL, REST, AppApi, or custom API routes, add their paths to `custom_api_paths` only if those routes have their own authentication or safety checks.
 6. For logged-in user workflows, remember that logged-in ProcessWire users bypass WireWall checks.
-7. For analytics or AI traffic analysis, read JSONL files from `/site/assets/WireWall/traffic/`, not the ProcessWire `wirewall` log.
+7. For analytics or AI traffic analysis, use the dashboard downloads or read JSONL files from the configured private WireWall data path, not the ProcessWire `wirewall` log.
 8. For high-traffic sites, prefer local MaxMind GeoLite2 databases over HTTP fallbacks.
 
 Do not implement a second firewall in templates unless the user explicitly asks for custom application-level rules. WireWall already handles request-level blocking.
@@ -203,7 +203,7 @@ The exact implementation is in `WireWall::checkAccess()`.
 If `enable_traffic_history` is enabled, WireWall writes one JSON object per public request:
 
 ```text
-/site/assets/WireWall/traffic/traffic-YYYY-MM-DD.jsonl
+../SITE-DIRECTORY-wirewall-private/traffic/traffic-YYYY-MM-DD.jsonl
 ```
 
 Schema marker:
@@ -270,6 +270,7 @@ ProcessWire numeric module versions should map SemVer to an integer used by Proc
 
 - `1.6.0` -> `160`
 - `1.8.0` -> `180`
+- `1.8.1` -> `181`
 - `1.6.1` -> `161`
 - `1.7.0` -> `170`
 - `2.0.0` -> `200`
@@ -312,7 +313,7 @@ Treat these as high risk and explain consequences before proposing:
 Do not do these unless the user explicitly asks and accepts risk:
 
 - Do not remove admin bypass protections.
-- Do not expose `/site/assets/WireWall/traffic/` through the web.
+- Do not move private WireWall traffic history back under the web document root.
 - Do not hard-code a client IP, country, or ASN in module source for one site.
 - Do not write site-specific business rules into the module unless the user is intentionally customizing this copy.
 - Do not assume README examples reflect the current live configuration.
