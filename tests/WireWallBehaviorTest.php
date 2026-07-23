@@ -163,7 +163,7 @@ $migrated = $wirewall->migrate170([
     'allowedIPs' => "198.51.100.0/24\n192.0.2.10",
     'allowedUserAgents' => 'Firefox, Brave',
 ]);
-assertSameValue(170, $migrated['version'], 'Migration should record WireWall config version 170');
+assertSameValue(171, $migrated['version'], 'Migration should record the current WireWall module version');
 assertSameValue('', $migrated['allowedIPs'], 'Legacy full-bypass IPs should leave the scoped known-bot field');
 assertSameValue("192.0.2.10\n198.51.100.0/24", $migrated['ip_whitelist'], 'Legacy full-bypass IPs should move to explicit whitelist without duplicates');
 assertSameValue("Firefox\nBrave", $migrated['compatibilityUserAgents'], 'Legacy browser names should move to compatibility exceptions');

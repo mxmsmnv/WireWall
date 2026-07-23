@@ -248,7 +248,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             );
         }
 
-        $data['version'] = 170;
+        $data['version'] = self::getModuleInfo()['version'];
         return $data;
     }
 
