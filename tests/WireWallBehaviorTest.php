@@ -134,7 +134,7 @@ if (($argv[1] ?? '') === '--bare-410') {
     $wirewall->bare(410);
 }
 
-$wirewall->configureExceptions("Googlebot\nFirefox, Brave", '', '', '');
+$wirewall->configureExceptions("Googlebot\nChrome-Lighthouse\nFirefox, Brave", '', '', '');
 assertSameValue(false, $wirewall->knownBot('Mozilla/5.0 Googlebot/2.1'), 'Verifiable bot UA must not be trusted before identity verification');
 assertSameValue(false, $wirewall->knownBot('Mozilla/5.0 Firefox/152.0'), 'Browser family must not become a known-bot bypass');
 assertSameValue(true, $wirewall->compatibility('Mozilla/5.0 Firefox/152.0'), 'Legacy browser family should migrate to compatibility scope');
@@ -148,6 +148,30 @@ assertSameValue('verified', $googleVerification['status'], 'Googlebot should pas
 assertSameValue(true, $wirewall->knownBot('Mozilla/5.0 Googlebot/2.1', $googleIP, null, true), 'Verified Googlebot may receive the configured known-bot exception');
 $cachedGoogleVerification = $wirewall->verifyBot('Mozilla/5.0 Googlebot/2.1', $googleIP);
 assertSameValue(true, $cachedGoogleVerification['cached'], 'Bot verification result should be cached');
+
+$lighthouseIP = '74.125.212.133';
+$lighthouseHost = 'google-proxy-74-125-212-133.google.com';
+$wirewall->configureDNS($lighthouseIP, $lighthouseHost, [$lighthouseIP]);
+$lighthouseVerification = $wirewall->verifyBot('Mozilla/5.0 Chrome/136.0 Chrome-Lighthouse', $lighthouseIP);
+assertSameValue('verified', $lighthouseVerification['status'], 'Google Lighthouse should pass forward-confirmed reverse DNS');
+assertSameValue(
+    true,
+    $wirewall->knownBot('Mozilla/5.0 Chrome/136.0 Chrome-Lighthouse', $lighthouseIP, 'AS15169 GOOGLE', true),
+    'Verified Google Lighthouse may receive the configured known-bot exception'
+);
+
+$spoofedLighthouseIP = '203.0.113.56';
+$spoofedLighthouseHost = 'google-proxy.attacker.example';
+$wirewall->configureDNS($spoofedLighthouseIP, $spoofedLighthouseHost, [$spoofedLighthouseIP]);
+$spoofedLighthouseVerification = $wirewall->verifyBot(
+    'Mozilla/5.0 Chrome/136.0 Chrome-Lighthouse',
+    $spoofedLighthouseIP
+);
+assertSameValue(
+    'unverified',
+    $spoofedLighthouseVerification['status'],
+    'A spoofed Lighthouse User-Agent outside Google DNS must fail'
+);
 
 $spoofedIP = '203.0.113.55';
 $spoofedHost = 'crawl.googlebot.com.attacker.example';
@@ -167,7 +191,7 @@ $migrated = $wirewall->migrate170([
     'allowedIPs' => "198.51.100.0/24\n192.0.2.10",
     'allowedUserAgents' => 'Firefox, Brave',
 ]);
-assertSameValue(182, $migrated['version'], 'Migration should record the current WireWall module version');
+assertSameValue(191, $migrated['version'], 'Migration should record the current WireWall module version');
 assertSameValue('', $migrated['allowedIPs'], 'Legacy full-bypass IPs should leave the scoped known-bot field');
 assertSameValue("192.0.2.10\n198.51.100.0/24", $migrated['ip_whitelist'], 'Legacy full-bypass IPs should move to explicit whitelist without duplicates');
 assertSameValue("Firefox\nBrave", $migrated['compatibilityUserAgents'], 'Legacy browser names should move to compatibility exceptions');

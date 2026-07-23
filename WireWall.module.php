@@ -1,7 +1,7 @@
 <?php namespace ProcessWire;
 
 /**
- * WireWall 1.9.0 - Advanced Traffic Firewall
+ * WireWall 1.9.1 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -13,7 +13,7 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.9.0
+ * @version 1.9.1
  * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @date April 24, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
@@ -25,7 +25,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 190,
+            'version' => 191,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -338,7 +338,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
 
         return [
             'schema' => 'wirewall_settings_export_v1',
-            'module_version' => '1.9.0',
+            'module_version' => '1.9.1',
             'module_version_number' => self::getModuleInfo()['version'],
             'exported_at' => date('c'),
             'settings' => $settings,
@@ -1981,6 +1981,12 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      * Return verification rules for crawler User-Agents with official DNS guidance.
      */
     protected function getVerifiableBotProvider($userAgent) {
+        if (preg_match('/\bChrome-Lighthouse\b/i', (string)$userAgent)) {
+            return [
+                'name' => 'google-lighthouse',
+                'suffixes' => ['.google.com'],
+            ];
+        }
         if (preg_match('/googlebot|google-inspectiontool/i', (string)$userAgent)) {
             return [
                 'name' => 'google',
@@ -3612,9 +3618,9 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f->name = 'allowedUserAgents';
         $f->label = 'Known Bot User-Agents';
         $f->description = 'User-Agent substrings that skip bot-category and fake-browser heuristics only. Bans, triggers, rate limits, network checks, geo rules, and explicit blocks still apply.';
-        $f->notes = 'Examples: Googlebot, Bingbot, UptimeRobot, facebookexternalhit, Slackbot. Googlebot/Bingbot require cached forward-confirmed reverse DNS; UptimeRobot requires a match in the official UptimeRobot IP API.';
+        $f->notes = 'Examples: Googlebot, Chrome-Lighthouse, Bingbot, UptimeRobot, facebookexternalhit, Slackbot. Googlebot/Bingbot and Chrome-Lighthouse require cached forward-confirmed reverse DNS; UptimeRobot requires a match in the official UptimeRobot IP API.';
         $f->rows = 6;
-        $f->value = isset($data['allowedUserAgents']) ? $data['allowedUserAgents'] : "Googlebot\nBingbot\nUptimeRobot\nYandex\nfacebookexternalhit\nSlackbot\nLinkedInBot\nTwitterbot\nWhatsApp\nApplebot";
+        $f->value = isset($data['allowedUserAgents']) ? $data['allowedUserAgents'] : "Googlebot\nChrome-Lighthouse\nBingbot\nUptimeRobot\nYandex\nfacebookexternalhit\nSlackbot\nLinkedInBot\nTwitterbot\nWhatsApp\nApplebot";
         $fieldset->add($f);
 
         $f = $modules->get('InputfieldTextarea');

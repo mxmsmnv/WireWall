@@ -8,7 +8,7 @@
 
 If this project helps your work, consider supporting future development: [GitHub Sponsors](https://github.com/sponsors/mxmsmnv) or [smnv.org/sponsor](https://smnv.org/sponsor/).
 
-**Version:** 1.9.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
+**Version:** 1.9.1 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
 
 Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection, rate limiting, VPN/Proxy/Tor detection, JS challenge, and a real-time admin dashboard.
 
@@ -110,7 +110,7 @@ Rate Limiting: 10 req/min, 60 min ban
 ✅ Block AI Bots
 ✅ Block VPN/Proxy/Tor
 
-Exceptions → Known Bot User-Agents: Googlebot, Bingbot, UptimeRobot (default)
+Exceptions → Known Bot User-Agents: Googlebot, Chrome-Lighthouse, Bingbot, UptimeRobot (default)
 Exceptions → Known Bot ASNs: 15169 (Google), 8075 (Microsoft)
 Custom Block Rules → Scanner Trigger Preset: Standard
 IP Control → Whitelist: only explicitly trusted office/home/service IPs
@@ -233,6 +233,8 @@ private keys, secrets, or API keys are replaced automatically.
 **Legitimate traffic blocked** — use IP Whitelist only for a tightly controlled full bypass. For bots, add the UA/IP/ASN to the scoped Known Bot fields. For browser-header quirks, use Browser / Client Compatibility Exceptions. Review `Admin → Setup → Logs → wirewall`.
 
 **Search engines blocked** — add `Googlebot` / `Bingbot` to Known Bot User-Agents and AS15169 / AS8075 to Known Bot ASNs. These rules do not bypass rate limits, triggers, network checks, geo policy, or explicit blocks.
+
+**PageSpeed Insights blocked by network rules** — add `Chrome-Lighthouse` to Known Bot User-Agents and AS15169 to Known Bot ASNs. WireWall requires forward-confirmed reverse DNS under `*.google.com` before the scoped exception can skip proxy, datacenter, and ASN checks.
 
 **UptimeRobot blocked by datacenter rules** — add `UptimeRobot` to Known Bot User-Agents. WireWall verifies UptimeRobot requests against the official UptimeRobot IP API before letting them skip datacenter/proxy/ASN heuristics.
 

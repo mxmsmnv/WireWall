@@ -4,6 +4,19 @@ All notable changes to WireWall are documented here.
 
 ---
 
+## 1.9.1 — July 23, 2026
+
+### Bug Fixes
+
+- Added cached forward-confirmed reverse DNS verification for Google PageSpeed Insights `Chrome-Lighthouse` requests.
+- Verified Lighthouse requests can use the configured scoped known-bot exception without allowing spoofed Lighthouse User-Agents to bypass proxy, datacenter, or ASN checks.
+
+### Documentation
+
+- Added `Chrome-Lighthouse` to the default Known Bot User-Agent examples and documented the required Google ASN rule.
+
+---
+
 ## 1.9.0 — July 23, 2026
 
 ### New Features
