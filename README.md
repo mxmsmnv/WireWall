@@ -8,7 +8,7 @@
 
 If this project helps your work, consider supporting future development: [GitHub Sponsors](https://github.com/sponsors/mxmsmnv) or [smnv.org/sponsor](https://smnv.org/sponsor/).
 
-**Version:** 1.7.1 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
+**Version:** 1.8.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
 
 Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection, rate limiting, VPN/Proxy/Tor detection, JS challenge, and a real-time admin dashboard.
 
@@ -49,6 +49,8 @@ Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection,
 ### Dashboard
 - **Real-time statistics** — blocked/allowed counts, block rate, unique IPs, active bans, cache size
 - **Traffic history for AI analysis** — daily JSONL files with allowed/blocked requests, URL, referer, UA, country, ASN, and decision reason
+- **Protected report downloads** — individual JSONL files, date-range ZIPs, last-24-hours export, and AI incident bundles from the dashboard
+- **Redacted settings export** — download active settings for AI-assisted review without exposing secret-like values
 - **Hourly chart** — blocked requests over last 24 hours (Chart.js)
 - **Top reasons, countries, IPs** — bar charts with counts
 - **Active bans** — live list with TTL countdown
@@ -60,6 +62,7 @@ Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection,
 - **16-level priority system** — precise rule ordering
 - **File-based cache** — scales to 1M+ IPs, no database overhead
 - **Cache management UI** — per-type stats, clear buttons
+- **Dedicated settings storage** — canonical `wirewall_settings` table with automatic migration and ProcessWire config fallback
 - **Detailed logging** — country, city, region, ASN, UA in every log entry
 
 ---
@@ -196,6 +199,26 @@ WireWall writes one JSON object per request to daily files:
 ```
 
 This is separate from the ProcessWire log and is designed for later traffic analysis. Each row includes time, allow/block status, reason, IP, country, city/region when available, ASN, method, URL path/query, referer, User-Agent, and selected browser headers. Admin pages, logged-in users, CLI requests, and trusted module/API bypasses are not recorded.
+
+Authorized users can open `Admin → Setup → WireWall` to:
+
+- download today, yesterday, the last 24 hours, or any individual daily JSONL file;
+- create a ZIP for a selected date range;
+- create an AI incident bundle containing redacted settings, traffic, a summary, and handling notes.
+
+The traffic directory denies direct web access. Report routes also require the
+`wirewall-dashboard` permission.
+
+## Settings Storage and Export
+
+WireWall stores its canonical configuration in the `wirewall_settings` database
+table. Existing ProcessWire module configuration is imported automatically and
+kept synchronized as a fallback. The firewall runtime and dashboard both read
+through `WireWall::getWireWallSettings()`.
+
+Use **Download settings for AI** from the settings screen or dashboard for a
+redacted JSON snapshot. Keys that look like tokens, passwords, credentials,
+private keys, secrets, or API keys are replaced automatically.
 
 ---
 

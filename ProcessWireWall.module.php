@@ -9,7 +9,7 @@
  * Install: place ProcessWireWall.module.php in /site/modules/WireWall/
  * The module registers a page at Admin > Setup > WireWall
  *
- * @version 1.6.0
+ * @version 1.8.0
  * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @requires WireWall, ProcessWire>=3.0.200, PHP>=8.1
  */
@@ -19,7 +19,7 @@ class ProcessWireWall extends Process implements Module {
         return [
             'title'       => 'WireWall Dashboard',
             'summary'     => 'Firewall statistics and live event log',
-            'version'     => 160,
+            'version'     => 180,
             'author'      => 'Maxim Semenov',
             'href'     => 'https://smnv.org',
             'icon'        => 'shield',
@@ -50,6 +50,374 @@ class ProcessWireWall extends Process implements Module {
 
     protected function getTrafficHistoryDir(): string {
         return $this->wire('config')->paths->assets . 'WireWall/traffic/';
+    }
+
+    protected function getWireWallModule(): WireWall {
+        $module = $this->wire('modules')->get('WireWall');
+        if (!$module instanceof WireWall) {
+            throw new WireException('WireWall is not installed.');
+        }
+        return $module;
+    }
+
+    protected function assertReportAccess(): void {
+        $user = $this->wire('user');
+        if (!$user || !$user->isLoggedin() || !$user->hasPermission('wirewall-dashboard')) {
+            throw new WirePermissionException('WireWall dashboard permission is required.');
+        }
+    }
+
+    protected function sendDownload(string $path, string $downloadName, string $contentType): never {
+        if (!is_file($path) || !is_readable($path)) {
+            throw new Wire404Exception('The requested WireWall report does not exist.');
+        }
+
+        $safeName = preg_replace('/[^a-zA-Z0-9._-]/', '-', basename($downloadName));
+        header('Content-Type: ' . $contentType);
+        header('Content-Disposition: attachment; filename="' . $safeName . '"');
+        header('Content-Length: ' . filesize($path));
+        header('X-Content-Type-Options: nosniff');
+        header('Cache-Control: private, no-store, max-age=0');
+        readfile($path);
+        exit;
+    }
+
+    protected function sendGeneratedDownload(
+        string $path,
+        string $downloadName,
+        string $contentType
+    ): never {
+        register_shutdown_function(static function () use ($path): void {
+            if (is_file($path)) {
+                @unlink($path);
+            }
+        });
+        $this->sendDownload($path, $downloadName, $contentType);
+    }
+
+    protected function getTrafficFileForDate(string $date): string {
+        if (!$this->isValidDate($date)) {
+            throw new Wire404Exception('Invalid traffic report date.');
+        }
+
+        $path = $this->getTrafficHistoryDir() . 'traffic-' . $date . '.jsonl';
+        if (!is_file($path)) {
+            throw new Wire404Exception('No traffic report exists for ' . $date . '.');
+        }
+        return $path;
+    }
+
+    protected function isValidDate(string $date): bool {
+        $parsed = \DateTimeImmutable::createFromFormat('!Y-m-d', $date);
+        return $parsed instanceof \DateTimeImmutable && $parsed->format('Y-m-d') === $date;
+    }
+
+    protected function countJsonlRows(string $path): int {
+        $rows = 0;
+        $handle = @fopen($path, 'rb');
+        if (!$handle) return 0;
+        while (fgets($handle) !== false) {
+            $rows++;
+        }
+        fclose($handle);
+        return $rows;
+    }
+
+    protected function listTrafficFiles(): array {
+        $dir = $this->getTrafficHistoryDir();
+        $files = [];
+        if (!is_dir($dir)) return $files;
+
+        $indexPath = $this->getCacheDir() . 'traffic-report-index.json';
+        $index = [];
+        $indexJson = @file_get_contents($indexPath);
+        if (is_string($indexJson)) {
+            $decoded = json_decode($indexJson, true);
+            if (is_array($decoded)) {
+                $index = $decoded;
+            }
+        }
+        $nextIndex = [];
+
+        foreach (scandir($dir) as $file) {
+            if (!preg_match('/^traffic-(\d{4}-\d{2}-\d{2})\.jsonl$/', $file, $match)) {
+                continue;
+            }
+            $path = $dir . $file;
+            if (!is_file($path)) continue;
+            $size = filesize($path);
+            $modified = filemtime($path);
+            $cached = $index[$file] ?? [];
+            $rows = (
+                isset($cached['size'], $cached['modified'], $cached['rows'])
+                && (int)$cached['size'] === $size
+                && (int)$cached['modified'] === $modified
+            ) ? (int)$cached['rows'] : $this->countJsonlRows($path);
+            $nextIndex[$file] = compact('size', 'modified', 'rows');
+            $files[] = [
+                'date' => $match[1],
+                'file' => $file,
+                'path' => $path,
+                'size' => $size,
+                'rows' => $rows,
+            ];
+        }
+
+        $cacheDir = dirname($indexPath);
+        if ((is_dir($cacheDir) || @mkdir($cacheDir, 0755, true)) && $nextIndex !== $index) {
+            @file_put_contents(
+                $indexPath,
+                json_encode($nextIndex, JSON_UNESCAPED_SLASHES),
+                LOCK_EX
+            );
+        }
+
+        usort($files, static fn(array $a, array $b): int => strcmp($b['date'], $a['date']));
+        return $files;
+    }
+
+    protected function createDateRangeZip(string $from, string $to): string {
+        if (!$this->isValidDate($from) || !$this->isValidDate($to) || $from > $to) {
+            throw new WireException('Choose a valid traffic report date range.');
+        }
+
+        $start = new \DateTimeImmutable($from);
+        $end = new \DateTimeImmutable($to);
+        if ($start->diff($end)->days > 366) {
+            throw new WireException('Traffic report ranges are limited to 366 days.');
+        }
+        if (!class_exists('\ZipArchive')) {
+            throw new WireException('The PHP ZIP extension is required for range exports.');
+        }
+
+        $temp = tempnam(sys_get_temp_dir(), 'wirewall-range-');
+        if ($temp === false) {
+            throw new WireException('Could not create a temporary report.');
+        }
+        $zipPath = $temp . '.zip';
+        @unlink($temp);
+
+        $zip = new \ZipArchive();
+        if ($zip->open($zipPath, \ZipArchive::CREATE | \ZipArchive::OVERWRITE) !== true) {
+            throw new WireException('Could not create the traffic report archive.');
+        }
+
+        $added = 0;
+        for ($date = $start; $date <= $end; $date = $date->modify('+1 day')) {
+            $name = 'traffic-' . $date->format('Y-m-d') . '.jsonl';
+            $path = $this->getTrafficHistoryDir() . $name;
+            if (is_file($path)) {
+                $zip->addFile($path, $name);
+                $added++;
+            }
+        }
+        $zip->close();
+
+        if ($added === 0) {
+            @unlink($zipPath);
+            throw new Wire404Exception('No traffic reports exist in that date range.');
+        }
+        return $zipPath;
+    }
+
+    protected function createLast24HoursReport(): string {
+        $temp = tempnam(sys_get_temp_dir(), 'wirewall-24h-');
+        if ($temp === false) {
+            throw new WireException('Could not create a temporary report.');
+        }
+
+        $output = fopen($temp, 'wb');
+        if (!$output) {
+            @unlink($temp);
+            throw new WireException('Could not open the temporary report.');
+        }
+
+        $cutoff = time() - 86400;
+        foreach ([date('Y-m-d', strtotime('-1 day')), date('Y-m-d')] as $date) {
+            $path = $this->getTrafficHistoryDir() . 'traffic-' . $date . '.jsonl';
+            $input = @fopen($path, 'rb');
+            if (!$input) continue;
+            while (($line = fgets($input)) !== false) {
+                $row = json_decode($line, true);
+                $timestamp = is_array($row) ? (int)($row['unix_time'] ?? 0) : 0;
+                if ($timestamp >= $cutoff) {
+                    fwrite($output, $line);
+                }
+            }
+            fclose($input);
+        }
+        fclose($output);
+        return $temp;
+    }
+
+    protected function summarizeTraffic(array $paths): array {
+        $summary = [
+            'schema' => 'wirewall_incident_summary_v1',
+            'generated_at' => date('c'),
+            'total' => 0,
+            'status' => [],
+            'top_ips' => [],
+            'top_asns' => [],
+            'top_countries' => [],
+            'top_reasons' => [],
+            'hourly' => [],
+        ];
+
+        foreach ($paths as $path) {
+            $handle = @fopen($path, 'rb');
+            if (!$handle) continue;
+            while (($line = fgets($handle)) !== false) {
+                $row = json_decode($line, true);
+                if (!is_array($row)) continue;
+                $summary['total']++;
+                $this->incrementSummary($summary['status'], (string)($row['status'] ?? 'unknown'));
+                $this->incrementSummary($summary['top_ips'], (string)($row['ip'] ?? ''));
+                $this->incrementSummary($summary['top_asns'], (string)($row['asn'] ?? ''));
+                $this->incrementSummary($summary['top_countries'], (string)($row['country'] ?? ''));
+                $this->incrementSummary($summary['top_reasons'], (string)($row['reason'] ?? ''));
+                $time = (int)($row['unix_time'] ?? 0);
+                if ($time > 0) {
+                    $this->incrementSummary($summary['hourly'], date('Y-m-d H:00', $time));
+                }
+            }
+            fclose($handle);
+        }
+
+        foreach (['status', 'top_ips', 'top_asns', 'top_countries', 'top_reasons', 'hourly'] as $key) {
+            arsort($summary[$key]);
+            if (str_starts_with($key, 'top_')) {
+                $summary[$key] = array_slice($summary[$key], 0, 25, true);
+            }
+        }
+        return $summary;
+    }
+
+    protected function incrementSummary(array &$values, string $key): void {
+        $key = trim($key);
+        if ($key === '') return;
+        $values[$key] = ($values[$key] ?? 0) + 1;
+    }
+
+    protected function createIncidentBundle(): string {
+        if (!class_exists('\ZipArchive')) {
+            throw new WireException('The PHP ZIP extension is required for incident bundles.');
+        }
+
+        $temp = tempnam(sys_get_temp_dir(), 'wirewall-incident-');
+        if ($temp === false) {
+            throw new WireException('Could not create a temporary incident bundle.');
+        }
+        $zipPath = $temp . '.zip';
+        @unlink($temp);
+
+        $zip = new \ZipArchive();
+        if ($zip->open($zipPath, \ZipArchive::CREATE | \ZipArchive::OVERWRITE) !== true) {
+            throw new WireException('Could not create the incident bundle.');
+        }
+
+        $dates = [
+            'today' => date('Y-m-d'),
+            'yesterday' => date('Y-m-d', strtotime('-1 day')),
+        ];
+        $trafficPaths = [];
+        foreach ($dates as $label => $date) {
+            $path = $this->getTrafficHistoryDir() . 'traffic-' . $date . '.jsonl';
+            if (is_file($path)) {
+                $zip->addFile($path, 'traffic-' . $label . '.jsonl');
+                $trafficPaths[] = $path;
+            } else {
+                $zip->addFromString('traffic-' . $label . '.jsonl', '');
+            }
+        }
+
+        $settings = $this->getWireWallModule()->getAISettingsExport();
+        $summary = $this->summarizeTraffic($trafficPaths);
+        $jsonFlags = JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE;
+        $zip->addFromString('settings.json', json_encode($settings, $jsonFlags) . "\n");
+        $zip->addFromString('summary.json', json_encode($summary, $jsonFlags) . "\n");
+        $zip->addFromString(
+            'README.txt',
+            "WireWall AI Incident Bundle\n"
+            . "===========================\n\n"
+            . "Generated: " . date('c') . "\n"
+            . "Contents:\n"
+            . "- settings.json: redacted active settings and safe environment metadata\n"
+            . "- traffic-today.jsonl: today's request history, if available\n"
+            . "- traffic-yesterday.jsonl: yesterday's request history, if available\n"
+            . "- summary.json: aggregate counts for incident review\n\n"
+            . "Treat IP addresses, URLs, referers, and User-Agents as sensitive operational data.\n"
+        );
+        $zip->close();
+        return $zipPath;
+    }
+
+    public function ___executeDownloadSettings(): never {
+        $this->assertReportAccess();
+        $json = json_encode(
+            $this->getWireWallModule()->getAISettingsExport(),
+            JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+        );
+        $temp = tempnam(sys_get_temp_dir(), 'wirewall-settings-');
+        if ($temp === false || file_put_contents($temp, $json . "\n", LOCK_EX) === false) {
+            throw new WireException('Could not create the settings export.');
+        }
+        $this->sendGeneratedDownload(
+            $temp,
+            'wirewall-settings-' . date('Y-m-d-His') . '.json',
+            'application/json; charset=utf-8'
+        );
+    }
+
+    public function ___executeDownloadTraffic(): never {
+        $this->assertReportAccess();
+        $input = $this->wire('input');
+        $range = (string)$input->get->text('range');
+        if ($range === 'last24h') {
+            $this->sendGeneratedDownload(
+                $this->createLast24HoursReport(),
+                'wirewall-traffic-last-24h.jsonl',
+                'application/x-ndjson; charset=utf-8'
+            );
+        }
+
+        if ($range === 'today' || $range === 'yesterday') {
+            $date = $range === 'today' ? date('Y-m-d') : date('Y-m-d', strtotime('-1 day'));
+            $this->sendDownload(
+                $this->getTrafficFileForDate($date),
+                'traffic-' . $date . '.jsonl',
+                'application/x-ndjson; charset=utf-8'
+            );
+        }
+
+        $date = (string)$input->get->text('date');
+        if ($date !== '') {
+            $this->sendDownload(
+                $this->getTrafficFileForDate($date),
+                'traffic-' . $date . '.jsonl',
+                'application/x-ndjson; charset=utf-8'
+            );
+        }
+
+        $from = (string)$input->get->text('from');
+        $to = (string)$input->get->text('to');
+        if ($from !== '' && $to !== '') {
+            $this->sendGeneratedDownload(
+                $this->createDateRangeZip($from, $to),
+                'wirewall-traffic-' . $from . '-to-' . $to . '.zip',
+                'application/zip'
+            );
+        }
+
+        throw new Wire404Exception('Choose a WireWall traffic report.');
+    }
+
+    public function ___executeDownloadIncidentBundle(): never {
+        $this->assertReportAccess();
+        $this->sendGeneratedDownload(
+            $this->createIncidentBundle(),
+            'wirewall-incident-' . date('Y-m-d-His') . '.zip',
+            'application/zip'
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -284,6 +652,7 @@ class ProcessWireWall extends Process implements Module {
         $bans       = $this->getActiveBans();
         $cacheStats = $this->getCacheStats();
         $trafficStats = $this->getTrafficHistoryStats();
+        $trafficFiles = $this->listTrafficFiles();
 
         $sizeFormatted = $cacheStats['size'] > 1048576
             ? round($cacheStats['size'] / 1048576, 1) . ' MB'
@@ -299,13 +668,12 @@ class ProcessWireWall extends Process implements Module {
             $hourData[]   = $stats['byHour'][$h];
         }
 
-        $wireWallConfig = $this->wire('modules')->getModuleConfigData('WireWall');
+        $wireWallConfig = $this->getWireWallModule()->getWireWallSettings();
         $wireWallEnabled = (bool)($wireWallConfig['enabled'] ?? 0);
         $logEnabled = (bool)($wireWallConfig['enable_stats_logging'] ?? 0);
         $trafficHistoryEnabled = !array_key_exists('enable_traffic_history', $wireWallConfig) || (bool)$wireWallConfig['enable_traffic_history'];
         $adminUrl   = $this->wire('config')->urls->admin;
         $pageUrl    = $this->wire('page')->url;
-        $trafficDir = $this->getTrafficHistoryDir();
         $trafficSizeFormatted = $trafficStats['size'] > 1048576
             ? round($trafficStats['size'] / 1048576, 1) . ' MB'
             : round($trafficStats['size'] / 1024, 1) . ' KB';
@@ -714,9 +1082,59 @@ class ProcessWireWall extends Process implements Module {
             <strong>Traffic history:</strong>
             <?= number_format($trafficStats['files']) ?> JSONL files, <?= $trafficSizeFormatted ?>.
             Latest: <code><?= htmlspecialchars($trafficStats['latest'] ?: 'not created yet') ?></code>.
-            Path: <code><?= htmlspecialchars($trafficDir) ?></code>
+            <div class="ww-actions" style="justify-content:flex-start;margin-top:8px">
+                <a class="ww-btn" href="<?= $pageUrl ?>download-traffic/?range=today">Download today</a>
+                <a class="ww-btn" href="<?= $pageUrl ?>download-traffic/?range=yesterday">Download yesterday</a>
+                <a class="ww-btn" href="<?= $pageUrl ?>download-traffic/?range=last24h">Download last 24h</a>
+                <a class="ww-btn" href="<?= $pageUrl ?>download-incident-bundle/">
+                    <span uk-icon="icon:album;ratio:0.75"></span>Download AI incident bundle
+                </a>
+                <a class="ww-btn" href="<?= $pageUrl ?>download-settings/">
+                    <span uk-icon="icon:cog;ratio:0.75"></span>Download settings for AI
+                </a>
+            </div>
         </div>
     </div>
+    <?php endif; ?>
+
+    <?php if ($trafficHistoryEnabled && !empty($trafficFiles)): ?>
+    <section class="ww-panel">
+        <div class="ww-panel-head">
+            <p class="ww-head"><span uk-icon="icon:download;ratio:0.75" class="uk-margin-small-right"></span>Traffic reports</p>
+            <span class="ww-pill"><?= count($trafficFiles) ?> days</span>
+        </div>
+        <div class="ww-scroll" style="max-height:340px">
+            <table class="ww-table">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Rows</th>
+                        <th>Size</th>
+                        <th style="width:140px">Download</th>
+                    </tr>
+                </thead>
+                <tbody>
+                <?php foreach ($trafficFiles as $trafficFile): ?>
+                    <tr>
+                        <td class="ww-code"><?= htmlspecialchars($trafficFile['date']) ?></td>
+                        <td><?= number_format($trafficFile['rows']) ?></td>
+                        <td><?= $trafficFile['size'] >= 1048576
+                            ? round($trafficFile['size'] / 1048576, 1) . ' MB'
+                            : round($trafficFile['size'] / 1024, 1) . ' KB' ?></td>
+                        <td><a class="ww-btn" href="<?= $pageUrl ?>download-traffic/?date=<?= rawurlencode($trafficFile['date']) ?>">JSONL</a></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+        <div class="ww-panel-body">
+            <form method="get" action="<?= $pageUrl ?>download-traffic/" class="ww-actions" style="justify-content:flex-start">
+                <label>From <input class="uk-input uk-form-small" type="date" name="from" required></label>
+                <label>To <input class="uk-input uk-form-small" type="date" name="to" required></label>
+                <button class="ww-btn" type="submit"><span uk-icon="icon:album;ratio:0.75"></span>Download ZIP range</button>
+            </form>
+        </div>
+    </section>
     <?php endif; ?>
 
     <div class="ww-metrics">

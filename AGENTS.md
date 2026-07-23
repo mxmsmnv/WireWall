@@ -68,8 +68,14 @@ Dashboard:
 Configuration access:
 
 ```php
-$configData = $modules->getModuleConfigData('WireWall');
+$wirewall = $modules->get('WireWall');
+$configData = $wirewall->getWireWallSettings();
 ```
+
+`wirewall_settings` is the canonical storage table. ProcessWire module config is
+kept synchronized as a migration/rollback fallback. Use
+`saveWireWallSettings()` for module-owned settings writes; normal saves from the
+ProcessWire module configuration screen are synchronized automatically.
 
 Module instance access:
 
@@ -263,6 +269,7 @@ When code changes:
 ProcessWire numeric module versions should map SemVer to an integer used by ProcessWire. For this module's existing convention:
 
 - `1.6.0` -> `160`
+- `1.8.0` -> `180`
 - `1.6.1` -> `161`
 - `1.7.0` -> `170`
 - `2.0.0` -> `200`

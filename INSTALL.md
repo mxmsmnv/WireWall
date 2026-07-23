@@ -41,6 +41,10 @@ mv WireWall-master WireWall
 
 The dashboard is a separate `Process` module that creates **Admin → Setup → WireWall** automatically.
 
+WireWall also creates a dedicated `wirewall_settings` table. On upgrades, the
+existing ProcessWire module configuration is imported automatically and retained
+as a synchronized fallback.
+
 ---
 
 ## Step 3 — Initial configuration
