@@ -1,7 +1,7 @@
 <?php namespace ProcessWire;
 
 /**
- * WireWall 1.7.1 - Advanced Traffic Firewall
+ * WireWall 1.8.0 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -13,7 +13,7 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.7.1
+ * @version 1.8.0
  * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @date April 24, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
@@ -25,7 +25,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 171,
+            'version' => 180,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -57,6 +57,8 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     protected $geoipReader = null;
     protected $geoipAsnReader = null;
     protected $geoipCityReader = null;
+    protected $settingsTableReady = null;
+    protected $legacyTableSettings = [];
 
     /**
      * Get WireWall data directory path (persistent across updates)
@@ -87,6 +89,205 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      */
     protected function getTrafficHistoryPath() {
         return $this->getDataPath() . 'traffic/';
+    }
+
+    /**
+     * Create the canonical settings table when the database account permits it.
+     *
+     * Existing ProcessWire module configuration remains a fallback so a failed
+     * table migration can never disable the firewall or discard settings.
+     */
+    protected function ensureSettingsTable() {
+        if ($this->settingsTableReady !== null) {
+            return $this->settingsTableReady;
+        }
+
+        try {
+            $database = $this->wire('database');
+            $table = $database->escapeTable('wirewall_settings');
+            $database->exec(
+                "CREATE TABLE IF NOT EXISTS `{$table}` (
+                    `id` TINYINT UNSIGNED NOT NULL DEFAULT 1,
+                    `schema_version` SMALLINT UNSIGNED NOT NULL DEFAULT 1,
+                    `settings_json` MEDIUMTEXT NOT NULL,
+                    `updated` DATETIME NOT NULL,
+                    PRIMARY KEY (`id`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+            );
+
+            $columns = $database->query("SHOW COLUMNS FROM `{$table}`")->fetchAll(\PDO::FETCH_COLUMN);
+            if (
+                in_array('name', $columns, true)
+                && in_array('value', $columns, true)
+                && !in_array('settings_json', $columns, true)
+            ) {
+                $legacyRows = $database
+                    ->query("SELECT `name`, `value` FROM `{$table}`")
+                    ->fetchAll(\PDO::FETCH_KEY_PAIR);
+                if (is_array($legacyRows)) {
+                    $this->legacyTableSettings = $legacyRows;
+                }
+
+                $suffix = date('Ymd_His') . '_' . bin2hex(random_bytes(3));
+                $archiveBase = 'wirewall_settings_legacy_180_' . $suffix;
+                $archive = $database->escapeTable($archiveBase);
+                $stagingBase = 'wirewall_settings_v180_' . $suffix;
+                $staging = $database->escapeTable($stagingBase);
+                $database->exec(
+                    "CREATE TABLE `{$staging}` (
+                        `id` TINYINT UNSIGNED NOT NULL DEFAULT 1,
+                        `schema_version` SMALLINT UNSIGNED NOT NULL DEFAULT 1,
+                        `settings_json` MEDIUMTEXT NOT NULL,
+                        `updated` DATETIME NOT NULL,
+                        PRIMARY KEY (`id`)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+                );
+                $database->exec(
+                    "RENAME TABLE `{$table}` TO `{$archive}`, `{$staging}` TO `{$table}`"
+                );
+                $this->wire('log')->save(
+                    'wirewall',
+                    "Migrated legacy settings table; backup retained as {$archiveBase}."
+                );
+            } elseif (!in_array('settings_json', $columns, true)) {
+                throw new \RuntimeException('Unrecognized wirewall_settings table schema.');
+            }
+
+            $this->settingsTableReady = true;
+        } catch (\Throwable $e) {
+            $this->settingsTableReady = false;
+            $this->wire('log')->save(
+                'wirewall',
+                'Settings table unavailable; using ProcessWire module config fallback: ' . $e->getMessage()
+            );
+        }
+
+        return $this->settingsTableReady;
+    }
+
+    /**
+     * Read canonical WireWall settings, importing legacy module config once.
+     */
+    public function getWireWallSettings() {
+        $legacy = $this->wire('modules')->getModuleConfigData($this);
+        if (!is_array($legacy)) {
+            $legacy = [];
+        }
+
+        if (!$this->ensureSettingsTable()) {
+            return $legacy;
+        }
+
+        // Values from the retired key/value table fill missing keys only.
+        // The active ProcessWire config is newer and therefore wins conflicts.
+        if ($this->legacyTableSettings) {
+            $legacy = array_merge($this->legacyTableSettings, $legacy);
+        }
+
+        try {
+            $database = $this->wire('database');
+            $table = $database->escapeTable('wirewall_settings');
+            $query = $database->query("SELECT `settings_json` FROM `{$table}` WHERE `id` = 1");
+            $json = $query ? $query->fetchColumn() : false;
+            if (is_string($json) && $json !== '') {
+                $settings = json_decode($json, true);
+                if (is_array($settings)) {
+                    return $settings;
+                }
+                $this->wire('log')->save(
+                    'wirewall',
+                    'Canonical settings JSON is invalid; using ProcessWire module config fallback.'
+                );
+                return $legacy;
+            }
+
+            if ($legacy) {
+                $this->saveWireWallSettings($legacy);
+            }
+        } catch (\Throwable $e) {
+            $this->wire('log')->save(
+                'wirewall',
+                'Failed to read canonical settings; using ProcessWire module config fallback: ' . $e->getMessage()
+            );
+        }
+
+        return $legacy;
+    }
+
+    /**
+     * Save canonical WireWall settings.
+     */
+    public function saveWireWallSettings(array $settings) {
+        if (!$this->ensureSettingsTable()) {
+            return false;
+        }
+
+        $json = json_encode($settings, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if ($json === false) {
+            return false;
+        }
+
+        try {
+            $database = $this->wire('database');
+            $table = $database->escapeTable('wirewall_settings');
+            $statement = $database->prepare(
+                "INSERT INTO `{$table}` (`id`, `schema_version`, `settings_json`, `updated`)
+                 VALUES (1, 1, :settings_json, :updated)
+                 ON DUPLICATE KEY UPDATE
+                    `schema_version` = VALUES(`schema_version`),
+                    `settings_json` = VALUES(`settings_json`),
+                    `updated` = VALUES(`updated`)"
+            );
+            return $statement->execute([
+                ':settings_json' => $json,
+                ':updated' => date('Y-m-d H:i:s'),
+            ]);
+        } catch (\Throwable $e) {
+            $this->wire('log')->save('wirewall', 'Failed to save canonical settings: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Build a redacted, AI-friendly settings export.
+     */
+    public function getAISettingsExport() {
+        $settings = $this->redactSettingsForAI($this->getWireWallSettings());
+        $processWireVersion = defined('PROCESSWIRE_VERSION') ? PROCESSWIRE_VERSION : null;
+
+        return [
+            'schema' => 'wirewall_settings_export_v1',
+            'module_version' => '1.8.0',
+            'module_version_number' => self::getModuleInfo()['version'],
+            'exported_at' => date('c'),
+            'settings' => $settings,
+            'environment' => [
+                'php_version' => PHP_VERSION,
+                'processwire_version' => $processWireVersion,
+                'https_configured' => (bool)($this->wire('config')->https ?? false),
+            ],
+            'redaction' => [
+                'applied' => true,
+                'rule' => 'Keys that look like secrets, credentials, passwords, tokens, or API keys are replaced.',
+            ],
+        ];
+    }
+
+    /**
+     * Redact current and future secret-like settings recursively.
+     */
+    protected function redactSettingsForAI(array $settings) {
+        foreach ($settings as $key => $value) {
+            if (preg_match(
+                '/(?:api[_-]?key|secret|token|password|passwd|credential|private[_-]?key|authorization|cookie|session[_-]?key)/i',
+                (string)$key
+            )) {
+                $settings[$key] = '[REDACTED]';
+            } elseif (is_array($value)) {
+                $settings[$key] = $this->redactSettingsForAI($value);
+            }
+        }
+        return $settings;
     }
     
     /**
@@ -154,10 +355,11 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      */
     public function init() {
         // Load module settings explicitly (fixes ProcessWire not loading new fields)
-        $data = $this->wire('modules')->getModuleConfigData($this);
+        $data = $this->getWireWallSettings();
 
         $migratedData = $this->prepareConfigFor170($data);
         if ($migratedData !== $data) {
+            $this->saveWireWallSettings($migratedData);
             $this->wire('modules')->saveModuleConfigData($this, $migratedData);
             $data = $migratedData;
         }
@@ -221,31 +423,29 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      * Migrate legacy full-bypass exception fields to explicit 1.7 scopes.
      */
     protected function prepareConfigFor170(array $data) {
-        if ((int)($data['version'] ?? 0) >= 170) {
-            return $data;
-        }
+        if ((int)($data['version'] ?? 0) < 170) {
+            // allowedIPs was a full bypass before 1.7. Preserve that behavior by
+            // moving its entries to the field whose name now states that clearly.
+            $legacyAllowedIPs = trim((string)($data['allowedIPs'] ?? ''));
+            if ($legacyAllowedIPs !== '') {
+                $data['ip_whitelist'] = $this->mergeRuleText(
+                    (string)($data['ip_whitelist'] ?? ''),
+                    $legacyAllowedIPs
+                );
+                $data['allowedIPs'] = '';
+            }
 
-        // allowedIPs was a full bypass before 1.7. Preserve that behavior by
-        // moving its entries to the field whose name now states that clearly.
-        $legacyAllowedIPs = trim((string)($data['allowedIPs'] ?? ''));
-        if ($legacyAllowedIPs !== '') {
-            $data['ip_whitelist'] = $this->mergeRuleText(
-                (string)($data['ip_whitelist'] ?? ''),
-                $legacyAllowedIPs
+            // Browser names were often placed in allowedUserAgents to work around
+            // header heuristics. Preserve only that narrow compatibility behavior.
+            $browserPatterns = $this->extractUnsafeBrowserAllowPatterns(
+                (string)($data['allowedUserAgents'] ?? '')
             );
-            $data['allowedIPs'] = '';
-        }
-
-        // Browser names were often placed in allowedUserAgents to work around
-        // header heuristics. Preserve only that narrow compatibility behavior.
-        $browserPatterns = $this->extractUnsafeBrowserAllowPatterns(
-            (string)($data['allowedUserAgents'] ?? '')
-        );
-        if ($browserPatterns) {
-            $data['compatibilityUserAgents'] = $this->mergeRuleText(
-                (string)($data['compatibilityUserAgents'] ?? ''),
-                implode("\n", $browserPatterns)
-            );
+            if ($browserPatterns) {
+                $data['compatibilityUserAgents'] = $this->mergeRuleText(
+                    (string)($data['compatibilityUserAgents'] ?? ''),
+                    implode("\n", $browserPatterns)
+                );
+            }
         }
 
         $data['version'] = self::getModuleInfo()['version'];
@@ -294,6 +494,10 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         // Add version number to config
         $moduleInfo = self::getModuleInfo();
         $data['version'] = $moduleInfo['version'];
+
+        // The dedicated table is canonical; ProcessWire's config row remains a
+        // synchronized fallback for safe rollback and failed DB migrations.
+        $this->saveWireWallSettings($data);
         
         // Update event arguments
         $event->arguments(1, $data);
@@ -3583,6 +3787,32 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         
         $inputfields->add($fieldset);
 
+        // =====================================================================
+        // 11. EXPORT
+        // =====================================================================
+        $fieldset = $modules->get('InputfieldFieldset');
+        $fieldset->label = 'Export & Diagnostics';
+        $fieldset->collapsed = Inputfield::collapsedYes;
+        $fieldset->icon = 'download';
+
+        $dashboardInstalled = (bool)$modules->isInstalled('ProcessWireWall');
+        $exportUrl = wire('config')->urls->admin . 'setup/wirewall/download-settings/';
+        $f = $modules->get('InputfieldMarkup');
+        $f->label = 'AI Settings Export';
+        if ($dashboardInstalled) {
+            $f->value = "
+                <p>Download a redacted JSON snapshot of the active canonical settings for debugging or AI-assisted review.</p>
+                <p><a class='uk-button uk-button-default' href='{$exportUrl}'>
+                    <i class='fa fa-download'></i> Download settings for AI
+                </a></p>
+                <p><small>Secret-like keys are redacted automatically. The dashboard permission is required.</small></p>
+            ";
+        } else {
+            $f->value = '<p>Install <strong>WireWall Dashboard</strong> to enable protected settings and incident exports.</p>';
+        }
+        $fieldset->add($f);
+        $inputfields->add($fieldset);
+
         // Hidden field: version (auto-updated on each save)
         $f = $modules->get('InputfieldHidden');
         $f->name = 'version';
@@ -3625,6 +3855,11 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     public function ___install() {
         $dataPath = $this->getDataPath();
         $geoipPath = $this->getGeoIPPath();
+
+        // Create canonical settings storage and import any pre-existing module
+        // config. Failure is non-fatal because module config remains fallback.
+        $this->ensureSettingsTable();
+        $this->getWireWallSettings();
         
         // Create main data directory
         if (!is_dir($dataPath)) {
@@ -3667,6 +3902,12 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         // Only run migration when upgrading to 1.2.1 (version 121)
         if ($toVersion >= 121 && $fromVersion < 121) {
             $this->migrateDataToAssets();
+        }
+
+        if ($toVersion >= 180 && $fromVersion < 180) {
+            $settings = $this->prepareConfigFor170($this->getWireWallSettings());
+            $this->saveWireWallSettings($settings);
+            $this->wire('modules')->saveModuleConfigData($this, $settings);
         }
     }
     

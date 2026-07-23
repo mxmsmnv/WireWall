@@ -4,6 +4,25 @@ All notable changes to WireWall are documented here.
 
 ---
 
+## 1.8.0 — July 23, 2026
+
+### Settings and Migration
+
+- Added canonical settings storage in the dedicated `wirewall_settings` table.
+- Existing ProcessWire module configuration is imported automatically and remains synchronized as a safe fallback.
+- Added shared `getWireWallSettings()` and `saveWireWallSettings()` APIs so the firewall runtime and dashboard use the same source.
+- Added a redacted, AI-friendly settings JSON export with safe environment metadata.
+
+### Traffic Reports
+
+- Added protected dashboard downloads for individual daily JSONL reports, today, yesterday, and the last 24 hours.
+- Added ZIP exports for a selected date range.
+- Added an AI incident bundle with redacted settings, today/yesterday traffic, aggregate summary, and handling notes.
+- Added date, size, and row-count report inventory with a cached file index so unchanged history is not rescanned on every dashboard view.
+- Kept all report routes behind the `wirewall-dashboard` permission and retained direct web denial for the traffic directory.
+
+---
+
 ## 1.7.1 — July 23, 2026
 
 ### Security and Compatibility

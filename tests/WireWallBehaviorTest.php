@@ -59,6 +59,10 @@ final class TestableWireWall extends WireWall {
         return $this->prepareConfigFor170($data);
     }
 
+    public function redact(array $data): array {
+        return $this->redactSettingsForAI($data);
+    }
+
     public function configureDNS(string $ip, string $hostname, array $forwardAddresses): void {
         $this->reverseDNS[$ip] = $hostname;
         $this->forwardDNS[$hostname] = $forwardAddresses;
@@ -163,10 +167,19 @@ $migrated = $wirewall->migrate170([
     'allowedIPs' => "198.51.100.0/24\n192.0.2.10",
     'allowedUserAgents' => 'Firefox, Brave',
 ]);
-assertSameValue(171, $migrated['version'], 'Migration should record the current WireWall module version');
+assertSameValue(180, $migrated['version'], 'Migration should record the current WireWall module version');
 assertSameValue('', $migrated['allowedIPs'], 'Legacy full-bypass IPs should leave the scoped known-bot field');
 assertSameValue("192.0.2.10\n198.51.100.0/24", $migrated['ip_whitelist'], 'Legacy full-bypass IPs should move to explicit whitelist without duplicates');
 assertSameValue("Firefox\nBrave", $migrated['compatibilityUserAgents'], 'Legacy browser names should move to compatibility exceptions');
+
+$redacted = $wirewall->redact([
+    'ip_whitelist' => '192.0.2.10',
+    'api_key' => 'sensitive',
+    'provider' => ['accessToken' => 'sensitive-too', 'enabled' => 1],
+]);
+assertSameValue('192.0.2.10', $redacted['ip_whitelist'], 'Operational allow/block rules should remain useful in AI exports');
+assertSameValue('[REDACTED]', $redacted['api_key'], 'API keys must be redacted from AI exports');
+assertSameValue('[REDACTED]', $redacted['provider']['accessToken'], 'Nested token-like values must be redacted');
 
 assertSameValue([], $wirewall->scannerPatterns('none'), 'Disabled scanner preset must add no rules');
 $scannerPatterns = $wirewall->scannerPatterns('standard');
