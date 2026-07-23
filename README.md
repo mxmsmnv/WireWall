@@ -8,7 +8,7 @@
 
 If this project helps your work, consider supporting future development: [GitHub Sponsors](https://github.com/sponsors/mxmsmnv) or [smnv.org/sponsor](https://smnv.org/sponsor/).
 
-**Version:** 1.6.1 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
+**Version:** 1.7.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
 
 Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection, rate limiting, VPN/Proxy/Tor detection, JS challenge, and a real-time admin dashboard.
 
@@ -39,6 +39,9 @@ Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection,
 - **ASN blocking** — block entire networks by autonomous system number
 - **JavaScript challenge** — transparent challenge for suspicious requests
 - **URL / User-Agent trigger rules** — add strikes or immediately ban IPs when request URLs, query strings, or User-Agents match suspicious patterns
+- **Scanner trigger preset** — optional immediate bans for obvious `.env`, `.git`, `wp-config`, backup, and phpinfo probes
+- **Bare block responses** — minimal 404/410 responses that cannot execute site analytics
+- **Scoped exceptions** — known bots and browser compatibility rules no longer bypass unrelated protections
 - **IP whitelist / blacklist** — exact, wildcard, and CIDR support
 - **IP spoofing protection** — proxy headers (CF-Connecting-IP, Incap, Sucuri) only trusted when REMOTE_ADDR belongs to the CDN's published IP ranges
 
@@ -96,16 +99,17 @@ See [INSTALL.md](INSTALL.md) for full installation instructions including MaxMin
 ```
 ✅ Enable WireWall
 ✅ Enable Logging
-Block Action: Show block page
+Block Action: Bare 404 (recommended for bot/scanner protection)
 
 Rate Limiting: 10 req/min, 60 min ban
 ✅ Block Bad Bots
 ✅ Block AI Bots
 ✅ Block VPN/Proxy/Tor
 
-Exceptions → Allowed User-Agents: Googlebot, Bingbot (default)
-Exceptions → Allowed ASNs: 15169 (Google), 8075 (Microsoft)
-IP Control → Whitelist: your office/home IP
+Exceptions → Known Bot User-Agents: Googlebot, Bingbot (default)
+Exceptions → Known Bot ASNs: 15169 (Google), 8075 (Microsoft)
+Custom Block Rules → Scanner Trigger Preset: Standard
+IP Control → Whitelist: only explicitly trusted office/home/service IPs
 ```
 
 ---
@@ -118,18 +122,20 @@ IP Control → Whitelist: your office/home IP
 | 0.5 | Trusted ProcessWire AJAX |
 | 0.7 | Logged-in users — always allowed |
 | 1 | IP whitelist |
-| 1.5 | Allowed bots / IPs / ASNs |
-| 2 | Rate limiting |
-| 3 | IP blacklist |
-| 4 | JS challenge |
-| 5 | VPN / Proxy / Tor |
-| 6 | Datacenter |
-| 7 | ASN blocking |
-| 8 | Global rules (bots, paths, UA, referer) |
-| 9 | Country blocking |
-| 9.5 | City blocking |
-| 9.6 | Subdivision blocking |
-| 10 | Country-specific rules |
+| 1.5 | Classify scoped known-bot / compatibility exceptions |
+| 2 | Active temporary ban |
+| 2.5 | URL / User-Agent trigger rules |
+| 3 | Rate limiting (fixed 60-second window) |
+| 4 | IP blacklist |
+| 5 | JS challenge (except scoped compatibility clients) |
+| 6 | VPN / Proxy / Tor |
+| 7 | Datacenter |
+| 8 | ASN blocking |
+| 9 | Global rules (known bots skip bot heuristics, not explicit rules) |
+| 10 | Country blocking |
+| 10.5 | City blocking |
+| 10.6 | Subdivision blocking |
+| 11 | Country-specific rules |
 
 ---
 
@@ -196,9 +202,9 @@ This is separate from the ProcessWire log and is designed for later traffic anal
 
 **Admin area blocked** — WireWall never blocks the admin by design. If you cannot access admin, check server-level firewall rules, not WireWall.
 
-**Legitimate traffic blocked** — add the IP to Whitelist, or the UA to Allowed User-Agents, or the ASN to Allowed ASNs. Review `Admin → Setup → Logs → wirewall`.
+**Legitimate traffic blocked** — use IP Whitelist only for a tightly controlled full bypass. For bots, add the UA/IP/ASN to the scoped Known Bot fields. For browser-header quirks, use Browser / Client Compatibility Exceptions. Review `Admin → Setup → Logs → wirewall`.
 
-**Search engines blocked** — add `Googlebot` / `Bingbot` to Allowed User-Agents and AS15169 / AS8075 to Allowed ASNs.
+**Search engines blocked** — add `Googlebot` / `Bingbot` to Known Bot User-Agents and AS15169 / AS8075 to Known Bot ASNs. These rules do not bypass rate limits, triggers, network checks, geo policy, or explicit blocks.
 
 **MaxMind not detected** — verify `.mmdb` files are in `/site/assets/WireWall/geoip/` and composer autoload exists at `/site/assets/WireWall/vendor/autoload.php`.
 
