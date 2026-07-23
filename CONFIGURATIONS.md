@@ -53,7 +53,7 @@ Bot Protection:
   ✅ JS Challenge
 
 Exceptions:
-  Allowed ASNs: 15169 (Google), 8075 (Microsoft)
+  Known Bot ASNs: 15169 (Google), 8075 (Microsoft)
 ```
 
 ---
@@ -155,8 +155,8 @@ VPN / Proxy / Datacenter:
   ✅ Block Datacenters
 
 Exceptions:
-  Allowed User-Agents: Googlebot, Bingbot  (keep for SEO)
-  Allowed ASNs: 15169, 8075
+  Known Bot User-Agents: Googlebot, Bingbot  (keep for SEO)
+  Known Bot ASNs: 15169, 8075
 ```
 
 ---
@@ -249,7 +249,6 @@ Country Blocking:
 
 VPN / Proxy / Datacenter:
   ❌ Block Datacenters  (Cloudflare IPs are datacenter IPs)
-  Allowed ASNs: 13335 (Cloudflare)
 ```
 
 ---
@@ -321,21 +320,23 @@ Note: Logged-in ProcessWire users are exempt from all checks automatically.
 
 ---
 
-## Exception Hierarchy
+## Exception Scopes
 
-Whitelist checks run fastest-first. The most efficient pattern:
+Use the narrowest scope that solves the problem:
 
-| Priority | Method | Covers |
-|---|---|---|
-| 1 | IP Whitelist | Specific trusted IPs |
-| 2 | ASN Whitelist | Entire networks (e.g. AS15169 = all Google) |
-| 3 | User-Agent Whitelist | Bot families (Googlebot, Bingbot…) |
-| 4 | Country Whitelist | Entire countries |
+| Setting | Scope |
+|---|---|
+| IP Whitelist | Full-firewall bypass for tightly controlled trusted IPs only |
+| Known Bot IPs / ASNs / User-Agents | Skip bot-category and fake-browser heuristics; all other protections continue |
+| Browser / Client Compatibility Exceptions | Skip only fake-browser and JavaScript-challenge heuristics |
+| Country Whitelist mode | Geo policy; not an exception to bans, triggers, rate limits, or explicit blocks |
 
-Best practice: use ASN whitelisting for major services — one entry covers all their IPs.
+User-Agent text is spoofable. Known bot rules should not be treated as proof of
+identity, and broad browser-family names belong only in compatibility exceptions.
+Prefer known bot IP/CIDR data where it is maintained and reliable.
 
 ```
-Allowed ASNs:
+Known Bot ASNs:
   15169  — Google (Googlebot, GSC, Analytics)
   8075   — Microsoft (Bingbot)
   32934  — Facebook (Social preview crawler)

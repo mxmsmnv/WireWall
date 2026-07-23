@@ -1,7 +1,7 @@
 <?php namespace ProcessWire;
 
 /**
- * WireWall 1.6.1 - Advanced Traffic Firewall
+ * WireWall 1.7.0 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -13,7 +13,7 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.6.1
+ * @version 1.7.0
  * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @date April 24, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
@@ -25,7 +25,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 161,
+            'version' => 170,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -45,10 +45,12 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     // Allow AJAX from trusted ProcessWire modules (default: enabled)
     protected $allowTrustedModules = true;
     
-    // Allowed User-Agents and IPs (whitelist/exceptions)
+    // Scoped known-bot and compatibility exceptions
     protected $allowedUserAgents = '';
     protected $allowedIPs = '';
     protected $allowedASNs = '';
+    protected $compatibilityUserAgents = '';
+    protected $trigger_scanner_preset = 'none';
     
     // MaxMind GeoIP readers
     protected $geoipReader = null;
@@ -152,6 +154,12 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     public function init() {
         // Load module settings explicitly (fixes ProcessWire not loading new fields)
         $data = $this->wire('modules')->getModuleConfigData($this);
+
+        $migratedData = $this->prepareConfigFor170($data);
+        if ($migratedData !== $data) {
+            $this->wire('modules')->saveModuleConfigData($this, $migratedData);
+            $data = $migratedData;
+        }
         
         // Normalize checkbox values: convert empty strings to 0, keep 1 as is
         // This supports old configs with "" and new configs with 0/1
@@ -180,6 +188,12 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         if (isset($data['allowedIPs'])) {
             $this->allowedIPs = $data['allowedIPs'];
         }
+        if (isset($data['compatibilityUserAgents'])) {
+            $this->compatibilityUserAgents = $data['compatibilityUserAgents'];
+        }
+        if (isset($data['trigger_scanner_preset'])) {
+            $this->trigger_scanner_preset = $data['trigger_scanner_preset'];
+        }
         if (isset($data['allowTrustedModules'])) {
             $this->allowTrustedModules = $data['allowTrustedModules'];
         }
@@ -200,6 +214,51 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         
         // Initialize MaxMind GeoIP readers if available
         $this->initializeGeoIP();
+    }
+
+    /**
+     * Migrate legacy full-bypass exception fields to explicit 1.7 scopes.
+     */
+    protected function prepareConfigFor170(array $data) {
+        if ((int)($data['version'] ?? 0) >= 170) {
+            return $data;
+        }
+
+        // allowedIPs was a full bypass before 1.7. Preserve that behavior by
+        // moving its entries to the field whose name now states that clearly.
+        $legacyAllowedIPs = trim((string)($data['allowedIPs'] ?? ''));
+        if ($legacyAllowedIPs !== '') {
+            $data['ip_whitelist'] = $this->mergeRuleText(
+                (string)($data['ip_whitelist'] ?? ''),
+                $legacyAllowedIPs
+            );
+            $data['allowedIPs'] = '';
+        }
+
+        // Browser names were often placed in allowedUserAgents to work around
+        // header heuristics. Preserve only that narrow compatibility behavior.
+        $browserPatterns = $this->extractUnsafeBrowserAllowPatterns(
+            (string)($data['allowedUserAgents'] ?? '')
+        );
+        if ($browserPatterns) {
+            $data['compatibilityUserAgents'] = $this->mergeRuleText(
+                (string)($data['compatibilityUserAgents'] ?? ''),
+                implode("\n", $browserPatterns)
+            );
+        }
+
+        $data['version'] = 170;
+        return $data;
+    }
+
+    /**
+     * Merge newline-delimited rules without duplicates.
+     */
+    protected function mergeRuleText($current, $additional) {
+        return implode("\n", array_values(array_unique(array_merge(
+            $this->parseRules((string)$current),
+            $this->parseRules((string)$additional)
+        ))));
     }
     
     /**
@@ -366,13 +425,11 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $this->currentAS = $asn;
         $this->currentCountry = $country;
         
-        // === PRIORITY 1.5: ALLOWED BOTS/IPs/ASNs (EXCEPTIONS) ===
-        // Allow legitimate bots (Google, Bing, Yandex, etc.)
-        if ($this->isAllowedBot($userAgent, $ip, $asn)) {
-            $this->recordTrafficHistory($ip, $country, $asn, true, 'allowed-bot', $userAgent);
-            $this->logAccess($ip, $country, $asn, true, 'allowed-bot', $userAgent);
-            return;
-        }
+        // Known-bot exceptions skip bot/fake-browser heuristics only. They no
+        // longer bypass bans, trigger rules, rate limits, network checks, or
+        // explicit path/UA/referer blocks. Use IP Whitelist for a full bypass.
+        $knownBotException = $this->isAllowedBot($userAgent, $ip, $asn);
+        $compatibilityException = $this->matchesCompatibilityUserAgent($userAgent);
         
         // === PRIORITY 2: ACTIVE TEMPORARY BAN ===
         if ($this->isIPBanned($ip)) {
@@ -400,7 +457,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         }
         
         // === PRIORITY 5: JS CHALLENGE CHECK ===
-        if ($this->js_challenge_enabled) {
+        if ($this->js_challenge_enabled && !$knownBotException && !$compatibilityException) {
             // Check if suspicious AND no valid cookie
             if ($this->isSuspiciousRequest($userAgent) && !$this->verifyChallengeCookie()) {
                 $this->showJSChallenge($ip, $userAgent);
@@ -427,7 +484,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         }
         
         // === PRIORITY 9: GLOBAL RULES (bots, paths, UA, referer) ===
-        if ($this->checkGlobalRules($ip, $userAgent, $path, $referer)) {
+        if ($this->checkGlobalRules($ip, $userAgent, $path, $referer, $knownBotException, $compatibilityException)) {
             $this->blockAccess('global', $ip, $country, $asn, $userAgent);
             return;
         }
@@ -463,9 +520,10 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         }
         
         // === ACCESS ALLOWED ===
-        $this->recordTrafficHistory($ip, $country, $asn, true, '', $userAgent);
+        $allowedReason = $knownBotException ? 'known-bot' : ($compatibilityException ? 'compatibility-exception' : '');
+        $this->recordTrafficHistory($ip, $country, $asn, true, $allowedReason, $userAgent);
         if ($this->enable_stats_logging) {
-            $this->logAccess($ip, $country, $asn, true, '', $userAgent);
+            $this->logAccess($ip, $country, $asn, true, $allowedReason, $userAgent);
         }
     }
 
@@ -529,8 +587,18 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     protected function checkTriggerRules($ip, $userAgent, $requestUri) {
         $matched = false;
         $matchedType = '';
+        $matchedPreset = false;
 
-        if ($this->trigger_url_patterns ?? '') {
+        foreach ($this->getScannerPresetPatterns($this->trigger_scanner_preset) as $pattern) {
+            if ($this->matchTriggerPattern($requestUri, $pattern)) {
+                $matched = true;
+                $matchedType = 'url-preset';
+                $matchedPreset = true;
+                break;
+            }
+        }
+
+        if (!$matched && ($this->trigger_url_patterns ?? '')) {
             foreach ($this->parseTriggerPatterns($this->trigger_url_patterns) as $pattern) {
                 if ($this->matchTriggerPattern($requestUri, $pattern)) {
                     $matched = true;
@@ -557,12 +625,38 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $action = $this->trigger_rule_action ?? 'strike';
         $banMinutes = max(1, (int)($this->trigger_ban_minutes ?? ($this->rate_limit_minutes ?? 60)));
 
-        if ($action === 'block') {
+        if ($matchedPreset || $action === 'block') {
             $this->banIP($ip, $banMinutes * 60);
             return "trigger-{$matchedType}";
         }
 
         return $this->addTriggerStrike($ip, $matchedType, $banMinutes);
+    }
+
+    /**
+     * Return conservative scanner paths for the optional built-in preset.
+     *
+     * Preset matches are always blocked immediately rather than counted as
+     * strikes because they target files that a ProcessWire public site should
+     * never expose.
+     */
+    protected function getScannerPresetPatterns($preset) {
+        if ($preset !== 'standard') {
+            return [];
+        }
+
+        return [
+            '/.env',
+            '/.git',
+            '/.aws',
+            '/wp-config',
+            '/xmlrpc.php',
+            '/.debugbar',
+            '/server/config',
+            '/backup.zip',
+            '/backup.sql',
+            '/phpinfo',
+        ];
     }
 
     /**
@@ -1322,9 +1416,9 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     /**
      * Check global rules with categorized bots
      */
-    protected function checkGlobalRules($ip, $userAgent, $path, $referer) {
+    protected function checkGlobalRules($ip, $userAgent, $path, $referer, $knownBotException = false, $compatibilityException = false) {
         // 1. Block bad bots (scrapers, scanners)
-        if ($this->block_bad_bots) {
+        if (!$knownBotException && $this->block_bad_bots) {
             $badBots = $this->getBadBotPatterns();
             foreach ($badBots as $pattern) {
                 if (stripos($userAgent, $pattern) !== false) {
@@ -1334,7 +1428,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         }
         
         // 2. Block search engine bots
-        if ($this->block_search_bots) {
+        if (!$knownBotException && $this->block_search_bots) {
             $searchBots = $this->getSearchBotPatterns();
             foreach ($searchBots as $pattern) {
                 if (stripos($userAgent, $pattern) !== false) {
@@ -1344,7 +1438,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         }
         
         // 3. Block AI bots
-        if ($this->block_ai_bots) {
+        if (!$knownBotException && $this->block_ai_bots) {
             $aiBots = $this->getAIBotPatterns();
             foreach ($aiBots as $pattern) {
                 if (stripos($userAgent, $pattern) !== false) {
@@ -1354,7 +1448,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         }
         
         // 4. Block other bots (custom list)
-        if ($this->block_other_bots && $this->other_bots_list) {
+        if (!$knownBotException && $this->block_other_bots && $this->other_bots_list) {
             $otherBots = $this->parseRules($this->other_bots_list);
             foreach ($otherBots as $pattern) {
                 if (stripos($userAgent, $pattern) !== false) {
@@ -1364,7 +1458,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         }
         
         // 5. Detect fake browser
-        if ($this->detectFakeBrowser($userAgent)) {
+        if (!$knownBotException && !$compatibilityException && $this->detectFakeBrowser($userAgent)) {
             return true;
         }
         
@@ -1535,8 +1629,11 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     }
 
     /**
-     * Check if request is from an allowed bot or IP (whitelist/exceptions)
-     * Returns true if this request should bypass WireWall completely
+     * Check whether a request matches a known-bot exception.
+     *
+     * A match skips bot-category and fake-browser heuristics only. It does not
+     * bypass bans, triggers, rate limiting, network checks, geo rules, or
+     * explicit path/User-Agent/referer blocks.
      */
     protected function isAllowedBot($userAgent, $ip, $asn = null) {
         // Check allowed User-Agents
@@ -1622,6 +1719,45 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             'opera',
             'opr',
         ], true);
+    }
+
+    /**
+     * Extract common browser-family tokens from legacy allowlist text.
+     */
+    protected function extractUnsafeBrowserAllowPatterns($text) {
+        $patterns = [];
+        foreach ($this->parseRules((string)$text) as $line) {
+            foreach (preg_split('/[\s,;|]+/', $line, -1, PREG_SPLIT_NO_EMPTY) as $token) {
+                if ($this->isUnsafeBrowserAllowPattern($token)) {
+                    $patterns[] = trim($token);
+                }
+            }
+        }
+        return array_values(array_unique($patterns));
+    }
+
+    /**
+     * Check browser/client compatibility exceptions.
+     *
+     * These exceptions only skip fake-browser and JavaScript-challenge
+     * heuristics. Common browser names left in the legacy allowedUserAgents
+     * field are automatically treated with this narrower scope.
+     */
+    protected function matchesCompatibilityUserAgent($userAgent) {
+        $patterns = $this->parseRules($this->compatibilityUserAgents);
+        $patterns = array_merge(
+            $patterns,
+            $this->extractUnsafeBrowserAllowPatterns($this->allowedUserAgents)
+        );
+
+        foreach (array_unique($patterns) as $pattern) {
+            $pattern = trim((string)$pattern);
+            if ($pattern !== '' && stripos($userAgent, $pattern) !== false) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -2146,6 +2282,14 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             header('Location: ' . $this->redirect_url);
             exit;
         }
+
+        if ($this->block_action === 'bare_404') {
+            $this->sendBareBlockResponse(404);
+        }
+
+        if ($this->block_action === 'bare_410') {
+            $this->sendBareBlockResponse(410);
+        }
         
         // Silent 404 mode — serve ProcessWire's native 404 page
         if ($this->block_action === 'silent_404') {
@@ -2167,6 +2311,22 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         
         // Show beautiful block page (default)
         $this->showBlockPage($country, $ip, $reason, $asn, $cityData);
+    }
+
+    /**
+     * Return a minimal blocked response without templates, assets, or analytics.
+     */
+    protected function sendBareBlockResponse($statusCode) {
+        $statusCode = $statusCode === 410 ? 410 : 404;
+        $message = $statusCode === 410 ? '410 Gone' : '404 Not Found';
+
+        http_response_code($statusCode);
+        header('Content-Type: text/plain; charset=utf-8');
+        header('X-Robots-Tag: noindex, nofollow, noarchive');
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('Pragma: no-cache');
+        echo $message;
+        exit;
     }
 
     /**
@@ -2624,8 +2784,11 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f->label = 'Block Action';
         $f->addOption('show_page', 'Show block page');
         $f->addOption('silent_404', 'Silent 404 (stealth mode)');
+        $f->addOption('bare_404', 'Bare 404 (no template or analytics)');
+        $f->addOption('bare_410', 'Bare 410 Gone (no template or analytics)');
         $f->addOption('redirect', 'Redirect to URL');
         $f->value = $data['block_action'] ?? 'show_page';
+        $f->notes = 'Bare responses are recommended for scanner and bot blocks because they contain no HTML, JavaScript, assets, or analytics.';
         $fieldset->add($f);
 
         $f = $modules->get('InputfieldText');
@@ -2665,7 +2828,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f = $modules->get('InputfieldInteger');
         $f->name = 'rate_limit_requests';
         $f->label = 'Requests Per Minute';
-        $f->description = 'Maximum requests allowed per minute from a single IP';
+        $f->description = 'Maximum requests allowed in the fixed 60-second counting window for one IP.';
         $f->value = $data['rate_limit_requests'] ?? 10;
         $f->min = 1;
         $f->max = 1000;
@@ -2675,7 +2838,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f = $modules->get('InputfieldInteger');
         $f->name = 'rate_limit_minutes';
         $f->label = 'Ban Duration (minutes)';
-        $f->description = 'How long to ban an IP after exceeding the rate limit';
+        $f->description = 'How long to ban an IP after it exceeds Requests Per Minute. This does not change the 60-second counting window.';
         $f->value = $data['rate_limit_minutes'] ?? 60;
         $f->min = 1;
         $f->max = 1440;
@@ -2930,27 +3093,48 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $inputfields->add($fieldset);
 
         // =====================================================================
-        // 7. EXCEPTIONS (Allowed bots / IPs / ASNs)
+        // 7. EXCEPTIONS (scoped known bots and compatibility rules)
         // =====================================================================
         $fieldset = $modules->get('InputfieldFieldset');
         $fieldset->label = 'Exceptions';
-        $fieldset->description = 'Bots, IPs, and ASNs that bypass ALL WireWall checks';
+        $fieldset->description = 'Known bots skip bot/fake-browser heuristics only. Use IP Whitelist above for a deliberate full-firewall bypass.';
         $fieldset->collapsed = Inputfield::collapsedYes;
         $fieldset->icon = 'check-square';
 
+        $riskyAllowedPatterns = $this->extractUnsafeBrowserAllowPatterns(
+            (string)($data['allowedUserAgents'] ?? '')
+        );
+        foreach ($this->parseRules($data['allowedUserAgents'] ?? '') as $pattern) {
+            if (mb_strlen(trim($pattern)) < 4) {
+                $riskyAllowedPatterns[] = trim($pattern);
+            }
+        }
+        if ($riskyAllowedPatterns) {
+            $safePatterns = array_map(
+                fn($pattern) => $this->wire('sanitizer')->entities($pattern),
+                array_unique($riskyAllowedPatterns)
+            );
+            $f = $modules->get('InputfieldMarkup');
+            $f->label = 'Allowlist safety warning';
+            $f->value = '<p class="uk-alert-warning" uk-alert>Broad or spoofable User-Agent values were found: <strong>'
+                . implode(', ', $safePatterns)
+                . '</strong>. Browser-family values are treated as compatibility exceptions and never as full bypass rules.</p>';
+            $fieldset->add($f);
+        }
+
         $f = $modules->get('InputfieldTextarea');
         $f->name = 'allowedUserAgents';
-        $f->label = 'Allowed User-Agents';
-        $f->description = 'User-Agent substrings to always allow (one per line)';
-        $f->notes = 'Googlebot, Bingbot, Yandex, facebookexternalhit, Slackbot, LinkedInBot, Twitterbot, WhatsApp, Applebot';
+        $f->label = 'Known Bot User-Agents';
+        $f->description = 'User-Agent substrings that skip bot-category and fake-browser heuristics only. Bans, triggers, rate limits, network checks, geo rules, and explicit blocks still apply.';
+        $f->notes = 'Examples: Googlebot, Bingbot, facebookexternalhit, Slackbot. User-Agent text is spoofable; stronger bot verification is recommended.';
         $f->rows = 6;
         $f->value = isset($data['allowedUserAgents']) ? $data['allowedUserAgents'] : "Googlebot\nBingbot\nYandex\nfacebookexternalhit\nSlackbot\nLinkedInBot\nTwitterbot\nWhatsApp\nApplebot";
         $fieldset->add($f);
 
         $f = $modules->get('InputfieldTextarea');
         $f->name = 'allowedIPs';
-        $f->label = 'Allowed IPs';
-        $f->description = 'IP addresses or CIDR ranges to always allow. Supports IPv4 and IPv6. One per line.';
+        $f->label = 'Known Bot IPs';
+        $f->description = 'IP addresses or CIDR ranges that skip bot-category and fake-browser heuristics only. Use IP Whitelist for a trusted full bypass.';
         $f->notes = "66.249.64.0/19 — Google Bot\n157.55.39.0/24 — Bing Bot\n77.88.5.0/24 — Yandex Bot";
         $f->rows = 6;
         $f->value = isset($data['allowedIPs']) ? $data['allowedIPs'] : '';
@@ -2958,11 +3142,20 @@ class WireWall extends WireData implements Module, ConfigurableModule {
 
         $f = $modules->get('InputfieldTextarea');
         $f->name = 'allowedASNs';
-        $f->label = 'Allowed ASNs';
-        $f->description = 'ASN numbers or organisation names to always allow (one per line). Requires MaxMind ASN database.';
-        $f->notes = "15169 — Google\n8075 — Microsoft (Bing)\n32934 — Facebook\n13238 — Yandex";
+        $f->label = 'Known Bot ASNs';
+        $f->description = 'ASN numbers or organisation names that skip bot-category and fake-browser heuristics only. Network, rate, trigger, and explicit block rules still apply.';
+        $f->notes = "15169 — Google\n8075 — Microsoft (Bing)\n32934 — Facebook\n13238 — Yandex\nAvoid broad cloud/datacenter ASNs unless their traffic should receive this scoped exception.";
         $f->rows = 5;
         $f->value = isset($data['allowedASNs']) ? $data['allowedASNs'] : "15169\n8075\n32934\n13238";
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'compatibilityUserAgents';
+        $f->label = 'Browser / Client Compatibility Exceptions';
+        $f->description = 'User-Agent substrings that skip only fake-browser and JavaScript-challenge heuristics. All other protections still apply.';
+        $f->notes = 'Use only for a confirmed client-header compatibility problem. Broad browser names are spoofable and do not bypass rate limits, triggers, network checks, or explicit blocks.';
+        $f->rows = 4;
+        $f->value = $data['compatibilityUserAgents'] ?? '';
         $fieldset->add($f);
 
         $inputfields->add($fieldset);
@@ -2975,6 +3168,16 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $fieldset->description = 'Block by path, User-Agent pattern, referer domain, or configurable trigger strikes';
         $fieldset->collapsed = Inputfield::collapsedYes;
         $fieldset->icon = 'filter';
+
+        $hasCustomTriggers = trim((string)($data['trigger_url_patterns'] ?? '')) !== ''
+            || trim((string)($data['trigger_user_agents'] ?? '')) !== '';
+        $scannerPreset = $data['trigger_scanner_preset'] ?? 'none';
+        if (!$hasCustomTriggers && $scannerPreset === 'none') {
+            $f = $modules->get('InputfieldMarkup');
+            $f->label = 'Trigger rules are inactive';
+            $f->value = '<p class="uk-alert-warning" uk-alert>No scanner preset or custom trigger patterns are configured. Trigger action, strike, and ban settings will have no effect until at least one trigger source is enabled.</p>';
+            $fieldset->add($f);
+        }
 
         $f = $modules->get('InputfieldTextarea');
         $f->name = 'blocked_paths';
@@ -2991,6 +3194,16 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f->description = 'User-Agent substrings to block (one per line)';
         $f->rows = 4;
         $f->value = $data['blocked_user_agents'] ?? '';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldSelect');
+        $f->name = 'trigger_scanner_preset';
+        $f->label = 'Scanner Trigger Preset';
+        $f->description = 'Enable a maintained starter set for obvious secret/configuration probes such as .env, .git, wp-config, xmlrpc, backup archives, and phpinfo.';
+        $f->notes = 'Standard preset matches are blocked and temporarily banned immediately, even when custom trigger action uses strike mode.';
+        $f->addOption('none', 'Disabled');
+        $f->addOption('standard', 'Standard scanner paths (recommended)');
+        $f->value = $scannerPreset;
         $fieldset->add($f);
 
         $f = $modules->get('InputfieldRadios');
@@ -3035,7 +3248,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f->name = 'trigger_url_patterns';
         $f->label = 'URL / Query Trigger Patterns';
         $f->description = 'Case-insensitive URL and query string substrings that trigger the action above. Supports wildcards and pipe-separated alternatives.';
-        $f->notes = 'wp-json|wp-admin|wp-login|wp-content|wp-includes';
+        $f->notes = 'Custom patterns follow Trigger Rule Action. Example: wp-json|wp-admin|wp-login|wp-content|wp-includes';
         $f->rows = 4;
         $f->value = $data['trigger_url_patterns'] ?? '';
         $f->collapsed = Inputfield::collapsedBlank;

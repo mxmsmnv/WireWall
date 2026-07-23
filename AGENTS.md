@@ -86,7 +86,7 @@ General:
 - `enabled`
 - `enable_stats_logging`
 - `enable_traffic_history`
-- `block_action` (`show_page`, `silent_404`, `redirect`)
+- `block_action` (`show_page`, `silent_404`, `bare_404`, `bare_410`, `redirect`)
 - `redirect_url`
 - `block_message`
 
@@ -133,12 +133,20 @@ Exceptions:
 - `allowedUserAgents`
 - `allowedIPs`
 - `allowedASNs`
+- `compatibilityUserAgents`
+
+`ip_whitelist` is the explicit full-firewall bypass. The `allowed*` fields above
+classify known bots and skip only bot/fake-browser heuristics.
+`compatibilityUserAgents` skips only fake-browser and JavaScript-challenge
+heuristics; all bans, triggers, rate limits, network checks, geo rules, and
+explicit blocks still apply.
 
 Custom rules:
 
 - `blocked_paths`
 - `blocked_user_agents`
 - `trigger_rule_action`
+- `trigger_scanner_preset`
 - `trigger_strike_limit`
 - `trigger_strike_window_minutes`
 - `trigger_ban_minutes`
@@ -165,7 +173,7 @@ When explaining behavior or debugging blocks, use this high-level order:
 2. Trusted ProcessWire module AJAX/API bypass
 3. Logged-in ProcessWire user bypass
 4. IP whitelist
-5. Allowed bots/IPs/ASNs
+5. Classify scoped known-bot and compatibility exceptions
 6. Active temporary ban
 7. URL/User-Agent trigger rules
 8. Rate limiting
@@ -174,7 +182,7 @@ When explaining behavior or debugging blocks, use this high-level order:
 11. VPN/proxy/Tor detection
 12. Datacenter detection
 13. ASN blocking
-14. Global bot/path/UA/referer rules
+14. Global bot/path/UA/referer rules (scoped exceptions skip only their relevant heuristics)
 15. Country blocking
 16. City/subdivision blocking
 17. Country-specific rules
@@ -351,7 +359,7 @@ Fast rollback options:
 - Add the affected IP to `ip_whitelist`.
 - Remove the problematic path, ASN, User-Agent, referer, country, city, or subdivision rule.
 - Clear active bans from cache management if a legitimate IP was temporarily banned.
-- Temporarily set `block_action` to `silent_404` or `show_page` if redirect behavior is causing trouble.
+- Temporarily set `block_action` to `bare_404`, `silent_404`, or `show_page` if redirect behavior is causing trouble.
 
 Do not delete persistent data directories as a first rollback step.
 

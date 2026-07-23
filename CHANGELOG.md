@@ -4,6 +4,28 @@ All notable changes to WireWall are documented here.
 
 ---
 
+## 1.7.0 — July 23, 2026
+
+### New Features
+
+- Added `bare_404` and `bare_410` block actions that return minimal text responses without ProcessWire templates, JavaScript, assets, or analytics.
+- Added an optional standard scanner trigger preset for obvious secret/configuration probes; preset matches are blocked and temporarily banned immediately.
+- Added browser/client compatibility exceptions with narrowly scoped behavior.
+
+### Security Improvements
+
+- Changed known bot User-Agent, IP, and ASN exceptions so they skip only bot-category and fake-browser heuristics instead of bypassing the entire firewall.
+- Existing browser-family values in the legacy allowed User-Agent field are automatically treated as compatibility exceptions rather than trusted bypasses.
+- Added a one-time migration that moves legacy full-bypass Allowed IP entries into the explicit IP Whitelist before applying the new scoped exception behavior.
+- Added admin warnings for broad/spoofable User-Agent exceptions and inactive trigger configurations.
+
+### Documentation and UX
+
+- Clarified that rate limiting always uses a fixed 60-second counting window and that `rate_limit_minutes` controls ban duration.
+- Updated exception labels and documentation to distinguish full IP whitelist bypasses, known bots, and compatibility exceptions.
+
+---
+
 ## 1.6.1 — July 1, 2026
 
 ### Bug Fixes
