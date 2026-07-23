@@ -1,7 +1,7 @@
 <?php namespace ProcessWire;
 
 /**
- * WireWall 1.8.1 - Advanced Traffic Firewall
+ * WireWall 1.8.2 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -13,7 +13,7 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.8.1
+ * @version 1.8.2
  * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @date April 24, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
@@ -25,7 +25,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 181,
+            'version' => 182,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -338,7 +338,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
 
         return [
             'schema' => 'wirewall_settings_export_v1',
-            'module_version' => '1.8.1',
+            'module_version' => '1.8.2',
             'module_version_number' => self::getModuleInfo()['version'],
             'exported_at' => date('c'),
             'settings' => $settings,
@@ -2101,7 +2101,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      * These values are sometimes added as compatibility workarounds for browser
      * header quirks, but a browser family name is trivial for bots to spoof.
      */
-    protected function isUnsafeBrowserAllowPattern($pattern) {
+    protected static function isUnsafeBrowserAllowPattern($pattern) {
         $pattern = strtolower(trim((string)$pattern));
         return in_array($pattern, [
             'firefox',
@@ -2119,11 +2119,11 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     /**
      * Extract common browser-family tokens from legacy allowlist text.
      */
-    protected function extractUnsafeBrowserAllowPatterns($text) {
+    protected static function extractUnsafeBrowserAllowPatterns($text) {
         $patterns = [];
-        foreach ($this->parseRules((string)$text) as $line) {
+        foreach (self::parseRuleText((string)$text) as $line) {
             foreach (preg_split('/[\s,;|]+/', $line, -1, PREG_SPLIT_NO_EMPTY) as $token) {
-                if ($this->isUnsafeBrowserAllowPattern($token)) {
+                if (self::isUnsafeBrowserAllowPattern($token)) {
                     $patterns[] = trim($token);
                 }
             }
@@ -2504,20 +2504,25 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             return $this->parsedCache[$cacheKey];
         }
         
-        $lines = explode("\n", $text);
-        $rules = [];
-        
-        foreach ($lines as $line) {
-            $line = trim($line);
-            // Skip comments and empty lines
-            if ($line && !str_starts_with($line, '#')) {
-                $rules[] = $line;
-            }
-        }
-        
+        $rules = self::parseRuleText((string)$text);
+
         // Cache parsed rules in memory
         $this->parsedCache[$cacheKey] = $rules;
         
+        return $rules;
+    }
+
+    /**
+     * Parse rule text without instance state (also used by static config UI).
+     */
+    protected static function parseRuleText($text) {
+        $rules = [];
+        foreach (explode("\n", (string)$text) as $line) {
+            $line = trim($line);
+            if ($line !== '' && !str_starts_with($line, '#')) {
+                $rules[] = $line;
+            }
+        }
         return $rules;
     }
 
@@ -3499,17 +3504,18 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $fieldset->collapsed = Inputfield::collapsedYes;
         $fieldset->icon = 'check-square';
 
-        $riskyAllowedPatterns = $this->extractUnsafeBrowserAllowPatterns(
+        $riskyAllowedPatterns = self::extractUnsafeBrowserAllowPatterns(
             (string)($data['allowedUserAgents'] ?? '')
         );
-        foreach ($this->parseRules($data['allowedUserAgents'] ?? '') as $pattern) {
+        foreach (self::parseRuleText($data['allowedUserAgents'] ?? '') as $pattern) {
             if (mb_strlen(trim($pattern)) < 4) {
                 $riskyAllowedPatterns[] = trim($pattern);
             }
         }
         if ($riskyAllowedPatterns) {
+            $sanitizer = wire('sanitizer');
             $safePatterns = array_map(
-                fn($pattern) => $this->wire('sanitizer')->entities($pattern),
+                fn($pattern) => $sanitizer->entities($pattern),
                 array_unique($riskyAllowedPatterns)
             );
             $f = $modules->get('InputfieldMarkup');

@@ -167,7 +167,7 @@ $migrated = $wirewall->migrate170([
     'allowedIPs' => "198.51.100.0/24\n192.0.2.10",
     'allowedUserAgents' => 'Firefox, Brave',
 ]);
-assertSameValue(181, $migrated['version'], 'Migration should record the current WireWall module version');
+assertSameValue(182, $migrated['version'], 'Migration should record the current WireWall module version');
 assertSameValue('', $migrated['allowedIPs'], 'Legacy full-bypass IPs should leave the scoped known-bot field');
 assertSameValue("192.0.2.10\n198.51.100.0/24", $migrated['ip_whitelist'], 'Legacy full-bypass IPs should move to explicit whitelist without duplicates');
 assertSameValue("Firefox\nBrave", $migrated['compatibilityUserAgents'], 'Legacy browser names should move to compatibility exceptions');
@@ -200,5 +200,17 @@ assertSameValue(false, $wirewall->globalRule('Googlebot/2.1', '/', true), 'Known
 
 $wirewall->configureGlobalRules(['blocked_paths' => '/private/*']);
 assertSameValue(true, $wirewall->globalRule('Googlebot/2.1', '/private/report', true), 'Known bot must still obey explicit path blocks');
+
+$configMethod = new \ReflectionMethod(WireWall::class, 'getModuleConfigInputfields');
+$configSource = array_slice(
+    file(dirname(__DIR__) . '/WireWall.module.php'),
+    $configMethod->getStartLine() - 1,
+    $configMethod->getEndLine() - $configMethod->getStartLine() + 1
+);
+assertSameValue(
+    false,
+    str_contains(implode('', $configSource), '$this'),
+    'Static ProcessWire configuration callback must not reference $this'
+);
 
 echo "WireWall behavior tests passed\n";

@@ -271,6 +271,7 @@ ProcessWire numeric module versions should map SemVer to an integer used by Proc
 - `1.6.0` -> `160`
 - `1.8.0` -> `180`
 - `1.8.1` -> `181`
+- `1.8.2` -> `182`
 - `1.6.1` -> `161`
 - `1.7.0` -> `170`
 - `2.0.0` -> `200`
