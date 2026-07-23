@@ -4,6 +4,20 @@ All notable changes to WireWall are documented here.
 
 ---
 
+## 1.9.0 — July 23, 2026
+
+### New Features
+
+- Added official UptimeRobot checker verification through `https://api.uptimerobot.com/meta/ips`.
+- Verified UptimeRobot requests can skip proxy, datacenter, ASN, and bot/fake-browser heuristics while still obeying bans, trigger rules, rate limits, IP blacklists, explicit blocks, and geo policy.
+- Added `UptimeRobot` to the default Known Bot User-Agent examples.
+
+### Documentation
+
+- Documented how to handle UptimeRobot false positives caused by datacenter blocking.
+
+---
+
 ## 1.8.2 — July 23, 2026
 
 ### Bug Fixes

@@ -1,7 +1,7 @@
 <?php namespace ProcessWire;
 
 /**
- * WireWall 1.8.2 - Advanced Traffic Firewall
+ * WireWall 1.9.0 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -13,7 +13,7 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.8.2
+ * @version 1.9.0
  * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @date April 24, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
@@ -25,7 +25,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 182,
+            'version' => 190,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -338,7 +338,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
 
         return [
             'schema' => 'wirewall_settings_export_v1',
-            'module_version' => '1.8.2',
+            'module_version' => '1.9.0',
             'module_version_number' => self::getModuleInfo()['version'],
             'exported_at' => date('c'),
             'settings' => $settings,
@@ -1934,6 +1934,12 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             return [];
         }
 
+        if (($provider['type'] ?? 'dns') === 'uptimerobot-api') {
+            $result = $this->verifyUptimeRobotIdentity($ip);
+            $this->currentBotVerification = $result;
+            return $result;
+        }
+
         $cacheKey = 'botverify_' . $provider['name'] . '_' . sha1($ip);
         $cached = $this->cacheGet($cacheKey);
         if (is_array($cached) && isset($cached['status'])) {
@@ -1987,7 +1993,83 @@ class WireWall extends WireData implements Module, ConfigurableModule {
                 'suffixes' => ['.search.msn.com'],
             ];
         }
+        if (preg_match('/uptimerobot/i', (string)$userAgent)) {
+            return [
+                'name' => 'uptimerobot',
+                'type' => 'uptimerobot-api',
+            ];
+        }
         return null;
+    }
+
+    /**
+     * Verify UptimeRobot checkers against their official IP metadata API.
+     */
+    protected function verifyUptimeRobotIdentity($ip) {
+        $cacheKey = 'botverify_uptimerobot_' . sha1($ip);
+        $cached = $this->cacheGet($cacheKey);
+        if (is_array($cached) && isset($cached['status'])) {
+            $cached['cached'] = true;
+            return $cached;
+        }
+
+        $prefixes = $this->getUptimeRobotPrefixes();
+        $verified = false;
+        foreach ($prefixes as $prefix) {
+            if ($this->matchIP($ip, $prefix)) {
+                $verified = true;
+                break;
+            }
+        }
+
+        $result = [
+            'provider' => 'uptimerobot',
+            'status' => $verified ? 'verified' : 'unverified',
+            'method' => 'official-ip-api',
+            'cached' => false,
+        ];
+
+        $this->cacheSet($cacheKey, $result, $verified ? 86400 : 3600);
+        return $result;
+    }
+
+    /**
+     * Fetch and cache UptimeRobot monitoring IP prefixes.
+     */
+    protected function getUptimeRobotPrefixes() {
+        $cacheKey = 'botverify_uptimerobot_prefixes';
+        $cached = $this->cacheGet($cacheKey);
+        if (is_array($cached)) {
+            return $cached;
+        }
+
+        $prefixes = [];
+        try {
+            $http = new WireHttp();
+            $http->setTimeout(2);
+            $response = $http->get('https://api.uptimerobot.com/meta/ips');
+            if ($response) {
+                $data = json_decode($response, true);
+                if (is_array($data) && !empty($data['prefixes']) && is_array($data['prefixes'])) {
+                    foreach ($data['prefixes'] as $entry) {
+                        if (!empty($entry['ip_prefix'])) {
+                            $prefixes[] = trim((string)$entry['ip_prefix']);
+                        }
+                        if (!empty($entry['ipv6_prefix'])) {
+                            $prefixes[] = trim((string)$entry['ipv6_prefix']);
+                        }
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            if ($this->enable_stats_logging) {
+                $this->wire('log')->save('wirewall', 'UptimeRobot IP API error: ' . $e->getMessage());
+            }
+        }
+
+        $prefixes = array_values(array_unique(array_filter($prefixes)));
+        $this->cacheSet($cacheKey, $prefixes, $prefixes ? 86400 : 3600);
+        return $prefixes;
     }
 
     /**
@@ -3530,9 +3612,9 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f->name = 'allowedUserAgents';
         $f->label = 'Known Bot User-Agents';
         $f->description = 'User-Agent substrings that skip bot-category and fake-browser heuristics only. Bans, triggers, rate limits, network checks, geo rules, and explicit blocks still apply.';
-        $f->notes = 'Examples: Googlebot, Bingbot, facebookexternalhit, Slackbot. Googlebot/Bingbot UA matches require cached forward-confirmed reverse DNS; other User-Agent text remains spoofable.';
+        $f->notes = 'Examples: Googlebot, Bingbot, UptimeRobot, facebookexternalhit, Slackbot. Googlebot/Bingbot require cached forward-confirmed reverse DNS; UptimeRobot requires a match in the official UptimeRobot IP API.';
         $f->rows = 6;
-        $f->value = isset($data['allowedUserAgents']) ? $data['allowedUserAgents'] : "Googlebot\nBingbot\nYandex\nfacebookexternalhit\nSlackbot\nLinkedInBot\nTwitterbot\nWhatsApp\nApplebot";
+        $f->value = isset($data['allowedUserAgents']) ? $data['allowedUserAgents'] : "Googlebot\nBingbot\nUptimeRobot\nYandex\nfacebookexternalhit\nSlackbot\nLinkedInBot\nTwitterbot\nWhatsApp\nApplebot";
         $fieldset->add($f);
 
         $f = $modules->get('InputfieldTextarea');

@@ -9,7 +9,7 @@
  * Install: place ProcessWireWall.module.php in /site/modules/WireWall/
  * The module registers a page at Admin > Setup > WireWall
  *
- * @version 1.8.1
+ * @version 1.9.0
  * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @requires WireWall, ProcessWire>=3.0.200, PHP>=8.1
  */
@@ -19,7 +19,7 @@ class ProcessWireWall extends Process implements Module {
         return [
             'title'       => 'WireWall Dashboard',
             'summary'     => 'Firewall statistics and live event log',
-            'version'     => 181,
+            'version'     => 190,
             'author'      => 'Maxim Semenov',
             'href'     => 'https://smnv.org',
             'icon'        => 'shield',
