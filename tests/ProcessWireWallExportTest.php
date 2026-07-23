@@ -11,6 +11,8 @@ class Wire404Exception extends WireException {}
 class WirePermissionException extends WireException {}
 
 require dirname(__DIR__) . '/ProcessWireWall.module.php';
+require dirname(__DIR__) . '/src/Dashboard/WireWallDashboardStats.php';
+require dirname(__DIR__) . '/src/Storage/WireWallCacheInspector.php';
 
 final class TestableProcessWireWall extends ProcessWireWall {
     public function __construct(private string $trafficDir) {}
@@ -97,7 +99,50 @@ exportAssertSame(true, $zip->open($zipPath) === true, 'Date range export should 
 exportAssertSame(2, $zip->numFiles, 'Date range ZIP should include both daily reports');
 $zip->close();
 
+$cacheDir = $tempDir . 'cache/';
+if (!is_dir($cacheDir)) {
+    mkdir($cacheDir, 0700, true);
+}
+file_put_contents($cacheDir . 'ban_203_0_113_9.cache', serialize(['expire' => time() + 120]));
+file_put_contents($cacheDir . 'ban_203_0_113_8.cache', serialize(['expire' => time() - 10]));
+file_put_contents($cacheDir . 'ratelimit_203_0_113_9.cache', '1');
+file_put_contents($cacheDir . 'proxy_203_0_113_9.cache', 'allowed');
+file_put_contents($cacheDir . 'geo_203_0_113_9.cache', 'US');
+$inspector = new WireWallCacheInspector($cacheDir, $tempDir);
+$bans = $inspector->getActiveBans();
+exportAssertSame(1, count($bans), 'Cache inspector should list only active bans');
+exportAssertSame('203.0.113.9', $bans[0]['ip'], 'Cache inspector should decode ban IPs from cache filenames');
+$cacheStats = $inspector->getCacheStats();
+exportAssertSame(5, $cacheStats['total'], 'Cache inspector should remove expired bans while keeping unrelated cache files');
+exportAssertSame(1, $cacheStats['ratelimit'], 'Cache inspector should count rate limit cache files');
+exportAssertSame(1, $cacheStats['ban'], 'Cache inspector should count active ban cache files');
+exportAssertSame(1, $cacheStats['proxy'], 'Cache inspector should count proxy cache files');
+exportAssertSame(1, $cacheStats['geo'], 'Cache inspector should count geo cache files');
+$trafficStats = $inspector->getTrafficHistoryStats();
+exportAssertSame(2, $trafficStats['files'], 'Cache inspector should count traffic history JSONL files');
+exportAssertSame('traffic-' . $today . '.jsonl', $trafficStats['latest'], 'Cache inspector should report latest traffic history file');
+
+$logPath = $tempDir . 'wirewall.txt';
+$logLine = date('Y-m-d H:i:s') . "\tguest\t/\tBLOCKED | US (Ashburn, Virginia) | 203.0.113.10 | AS64500 Example | UA: TestBot | datacenter\n";
+file_put_contents($logPath, "ignored\n" . $logLine . date('Y-m-d H:i:s') . "\tguest\t/\tALLOWED | CA | 198.51.100.20 | UA: Browser | allowed\n");
+$dashboardStats = new WireWallDashboardStats($logPath);
+$tail = $dashboardStats->readLogLines(2);
+exportAssertSame(2, count($tail), 'Dashboard stats should read the requested number of trailing log lines');
+$parsed = $dashboardStats->parseLine(trim($logLine));
+exportAssertSame('BLOCKED', $parsed['status'], 'Dashboard stats should parse WireWall status');
+exportAssertSame('US', $parsed['countryCode'], 'Dashboard stats should parse country code');
+exportAssertSame('datacenter', $parsed['reason'], 'Dashboard stats should parse decision reason');
+$built = $dashboardStats->buildStats($tail);
+exportAssertSame(2, $built['total'], 'Dashboard stats should aggregate parsed log rows');
+exportAssertSame(1, $built['blocked'], 'Dashboard stats should count blocked rows');
+exportAssertSame('2m 5s', $dashboardStats->formatTTL(125), 'Dashboard stats should format TTLs');
+
 @unlink($zipPath);
+foreach (glob($cacheDir . '*') ?: [] as $file) {
+    @unlink($file);
+}
+@rmdir($cacheDir);
+@unlink($logPath);
 @unlink($todayPath);
 @unlink($yesterdayPath);
 @rmdir($tempDir);

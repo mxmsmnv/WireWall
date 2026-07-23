@@ -8,7 +8,7 @@
 
 If this project helps your work, consider supporting future development: [GitHub Sponsors](https://github.com/sponsors/mxmsmnv) or [smnv.org/sponsor](https://smnv.org/sponsor/).
 
-**Version:** 1.9.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
+**Version:** 1.11.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
 
 Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection, rate limiting, VPN/Proxy/Tor detection, JS challenge, and a real-time admin dashboard.
 
@@ -43,6 +43,7 @@ Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection,
 - **Bare block responses** — minimal 404/410 responses that cannot execute site analytics
 - **Scoped exceptions** — known bots and browser compatibility rules no longer bypass unrelated protections
 - **Verified search crawlers** — configured Googlebot/Bingbot identities use cached forward-confirmed reverse DNS before network heuristics are relaxed
+- **Verified monitor providers** — configured UptimeRobot, Pingdom, StatusCake, Datadog Synthetics, and New Relic Synthetics requests are checked against official IP feeds before network heuristics are relaxed
 - **IP whitelist / blacklist** — exact, wildcard, and CIDR support
 - **IP spoofing protection** — proxy headers (CF-Connecting-IP, Incap, Sucuri) only trusted when REMOTE_ADDR belongs to the CDN's published IP ranges
 
@@ -110,7 +111,7 @@ Rate Limiting: 10 req/min, 60 min ban
 ✅ Block AI Bots
 ✅ Block VPN/Proxy/Tor
 
-Exceptions → Known Bot User-Agents: Googlebot, Bingbot, UptimeRobot (default)
+Exceptions → Known Bot User-Agents: Googlebot, Chrome-Lighthouse, Bingbot, UptimeRobot, Pingdom, StatusCake, DatadogSynthetics, NewRelicSynthetics (default)
 Exceptions → Known Bot ASNs: 15169 (Google), 8075 (Microsoft)
 Custom Block Rules → Scanner Trigger Preset: Standard
 IP Control → Whitelist: only explicitly trusted office/home/service IPs
@@ -171,6 +172,21 @@ composer require geoip2/geoip2
 /site/modules/WireWall/
 ├── WireWall.module.php          Main firewall module
 ├── ProcessWireWall.module.php   Dashboard module
+├── src/                         Internal service classes
+│   ├── Dashboard/
+│   │   └── WireWallDashboardStats.php
+│   ├── WireWallMonitorProviderVerifier.php
+│   ├── Storage/
+│   │   ├── WireWallCacheInspector.php
+│   │   ├── WireWallTrafficHistoryStore.php
+│   │   └── WireWallTrafficReportService.php
+│   └── Support/
+│       ├── WireWallIpMatcher.php
+│       └── WireWallRuleMatcher.php
+├── assets/                      Module artwork and packaged UI assets
+│   ├── dashboard.css
+│   ├── dashboard.js
+│   └── WireWall.png
 ├── README.md
 ├── INSTALL.md
 ├── CONFIGURATIONS.md
@@ -234,7 +250,9 @@ private keys, secrets, or API keys are replaced automatically.
 
 **Search engines blocked** — add `Googlebot` / `Bingbot` to Known Bot User-Agents and AS15169 / AS8075 to Known Bot ASNs. These rules do not bypass rate limits, triggers, network checks, geo policy, or explicit blocks.
 
-**UptimeRobot blocked by datacenter rules** — add `UptimeRobot` to Known Bot User-Agents. WireWall verifies UptimeRobot requests against the official UptimeRobot IP API before letting them skip datacenter/proxy/ASN heuristics.
+**PageSpeed Insights blocked by network rules** — add `Chrome-Lighthouse` to Known Bot User-Agents and AS15169 to Known Bot ASNs. WireWall requires forward-confirmed reverse DNS under `*.google.com` before the scoped exception can skip proxy, datacenter, and ASN checks.
+
+**Synthetic monitor blocked by datacenter rules** — add the service UA to Known Bot User-Agents. WireWall verifies UptimeRobot, Pingdom, StatusCake, Datadog Synthetics, and New Relic Synthetics requests against official IP feeds before letting them skip datacenter/proxy/ASN heuristics.
 
 **MaxMind not detected** — verify `.mmdb` files are in `/site/assets/WireWall/geoip/` and composer autoload exists at `/site/assets/WireWall/vendor/autoload.php`.
 

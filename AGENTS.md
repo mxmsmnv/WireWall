@@ -26,6 +26,14 @@ Core files:
 
 - `WireWall.module.php` - autoload firewall module
 - `ProcessWireWall.module.php` - admin dashboard Process module
+- `src/Dashboard/WireWallDashboardStats.php` - dashboard log tailing, parsing, aggregation, and TTL formatting
+- `src/WireWallMonitorProviderVerifier.php` - official IP-feed verifier for synthetic monitoring providers
+- `src/Storage/WireWallCacheInspector.php` - dashboard cache, active-ban, and traffic-history inventory
+- `src/Storage/WireWallTrafficHistoryStore.php` - private traffic-history path, migration, protection, and JSONL writing
+- `src/Storage/WireWallTrafficReportService.php` - dashboard traffic report listing, summaries, last-24h exports, and ZIP packaging
+- `src/Support/WireWallIpMatcher.php` - shared exact, wildcard, IPv4 CIDR, and IPv6 CIDR matcher
+- `src/Support/WireWallRuleMatcher.php` - shared rule parsing, wildcard matching, and unsafe browser allowlist extraction
+- `assets/dashboard.css` and `assets/dashboard.js` - dashboard assets loaded by `ProcessWireWall.module.php`
 - `README.md` - general purpose and installation
 - `INSTALL.md` - setup and server notes
 - `CONFIGURATIONS.md` - known configuration profiles
@@ -143,8 +151,12 @@ Exceptions:
 
 `ip_whitelist` is the explicit full-firewall bypass. The `allowed*` fields above
 classify known bots and skip only bot/fake-browser heuristics. Configured
-Googlebot/Bingbot UA rules require cached forward-confirmed reverse DNS before
-they are trusted as UA-only exceptions.
+Googlebot/Bingbot and Google PageSpeed Insights `Chrome-Lighthouse` UA rules
+require cached forward-confirmed reverse DNS before they are trusted as UA-only
+exceptions. Supported synthetic monitor UA rules, such as UptimeRobot, Pingdom,
+StatusCake, Datadog Synthetics, and New Relic Synthetics, require a cached match
+against the provider's official IP feed before they are trusted as UA-only
+exceptions.
 `compatibilityUserAgents` skips only fake-browser and JavaScript-challenge
 heuristics; all bans, triggers, rate limits, network checks, geo rules, and
 explicit blocks still apply.
@@ -273,6 +285,8 @@ ProcessWire numeric module versions should map SemVer to an integer used by Proc
 - `1.8.1` -> `181`
 - `1.8.2` -> `182`
 - `1.9.0` -> `190`
+- `1.10.0` -> `1100`
+- `1.11.0` -> `1110`
 - `1.6.1` -> `161`
 - `1.7.0` -> `170`
 - `2.0.0` -> `200`

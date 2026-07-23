@@ -1,7 +1,7 @@
 <?php namespace ProcessWire;
 
 /**
- * WireWall 1.9.0 - Advanced Traffic Firewall
+ * WireWall 1.11.0 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -13,7 +13,7 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.9.0
+ * @version 1.11.0
  * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @date April 24, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
@@ -25,7 +25,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 190,
+            'version' => 1110,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -42,6 +42,9 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     protected $currentAS = null;
     protected $currentCountry = null;
     protected $currentBotVerification = null;
+    protected $monitorProviderVerifier = null;
+    protected $trafficHistoryStore = null;
+    protected $ipMatcher = null;
     
     // Allow AJAX from trusted ProcessWire modules (default: enabled)
     protected $allowTrustedModules = true;
@@ -88,30 +91,14 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      * Get private persistent data outside the web document root.
      */
     protected function getPrivateDataPath() {
-        $config = $this->wire('config');
-        $configured = trim((string)($config->wireWallPrivateDataPath ?? ''));
-        if ($configured !== '') {
-            $isAbsolute = str_starts_with($configured, '/')
-                || (bool)preg_match('/^[A-Za-z]:[\/\\\\]/', $configured);
-            if ($isAbsolute) {
-                return rtrim($configured, '/\\') . DIRECTORY_SEPARATOR;
-            }
-            $this->wire('log')->save(
-                'wirewall',
-                'Ignoring relative wireWallPrivateDataPath; configure an absolute path.'
-            );
-        }
-
-        $root = rtrim((string)$config->paths->root, '/\\');
-        return dirname($root) . DIRECTORY_SEPARATOR . basename($root)
-            . '-wirewall-private' . DIRECTORY_SEPARATOR;
+        return $this->getTrafficHistoryStore()->getPrivateDataPath();
     }
 
     /**
      * Get traffic history directory path (AI-friendly request history).
      */
     protected function getTrafficHistoryPath() {
-        return $this->getPrivateDataPath() . 'traffic' . DIRECTORY_SEPARATOR;
+        return $this->getTrafficHistoryStore()->getTrafficHistoryPath();
     }
 
     /**
@@ -125,51 +112,28 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      * Move legacy public traffic files outside the document root.
      */
     protected function migrateTrafficHistoryToPrivateStorage() {
-        $legacy = $this->getDataPath() . 'traffic/';
-        $target = $this->getTrafficHistoryPath();
-        if ($legacy === $target) {
-            return;
+        $this->getTrafficHistoryStore()->migrateLegacyTraffic();
+    }
+
+    /**
+     * Load traffic history storage service.
+     */
+    public function getTrafficHistoryStore() {
+        if ($this->trafficHistoryStore instanceof WireWallTrafficHistoryStore) {
+            return $this->trafficHistoryStore;
         }
 
-        $parent = dirname(rtrim($target, '/\\'));
-        if (!is_dir($parent) && !@mkdir($parent, 0700, true)) {
-            $this->wire('log')->save('wirewall', "Could not create private data directory: {$parent}");
-            return;
-        }
-        @chmod($parent, 0700);
-
-        if (is_dir($legacy) && !is_dir($target)) {
-            if (!@rename($legacy, $target)) {
-                $this->wire('log')->save(
-                    'wirewall',
-                    "Could not move legacy traffic history from {$legacy} to {$target}"
-                );
-                return;
+        require_once __DIR__ . '/src/Storage/WireWallTrafficHistoryStore.php';
+        $config = $this->wire('config');
+        $this->trafficHistoryStore = new WireWallTrafficHistoryStore(
+            (string)$config->paths->root,
+            (string)$config->paths->assets,
+            (string)($config->wireWallPrivateDataPath ?? ''),
+            function($message) {
+                $this->wire('log')->save('wirewall', $message);
             }
-        } elseif (is_dir($legacy) && is_dir($target)) {
-            foreach (scandir($legacy) as $file) {
-                if (!preg_match('/^traffic-\d{4}-\d{2}-\d{2}\.jsonl$/', $file)) {
-                    continue;
-                }
-                $destination = $target . $file;
-                if (file_exists($destination)) {
-                    $destination = $target . 'legacy-' . date('Ymd-His') . '-' . $file;
-                }
-                if (!@rename($legacy . $file, $destination)) {
-                    $this->wire('log')->save('wirewall', "Could not move legacy traffic file: {$file}");
-                }
-            }
-        }
-
-        if (!is_dir($target) && !@mkdir($target, 0700, true)) {
-            $this->wire('log')->save('wirewall', "Could not create private traffic directory: {$target}");
-            return;
-        }
-
-        @chmod($target, 0700);
-        foreach (glob($target . '*.jsonl') ?: [] as $file) {
-            @chmod($file, 0600);
-        }
+        );
+        return $this->trafficHistoryStore;
     }
 
     /**
@@ -338,7 +302,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
 
         return [
             'schema' => 'wirewall_settings_export_v1',
-            'module_version' => '1.9.0',
+            'module_version' => '1.11.0',
             'module_version_number' => self::getModuleInfo()['version'],
             'exported_at' => date('c'),
             'settings' => $settings,
@@ -1934,8 +1898,8 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             return [];
         }
 
-        if (($provider['type'] ?? 'dns') === 'uptimerobot-api') {
-            $result = $this->verifyUptimeRobotIdentity($ip);
+        if (($provider['type'] ?? 'dns') === 'official-ip-feed') {
+            $result = $this->getMonitorProviderVerifier()->verify($provider, $ip);
             $this->currentBotVerification = $result;
             return $result;
         }
@@ -1981,6 +1945,12 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      * Return verification rules for crawler User-Agents with official DNS guidance.
      */
     protected function getVerifiableBotProvider($userAgent) {
+        if (preg_match('/\bChrome-Lighthouse\b/i', (string)$userAgent)) {
+            return [
+                'name' => 'google-lighthouse',
+                'suffixes' => ['.google.com'],
+            ];
+        }
         if (preg_match('/googlebot|google-inspectiontool/i', (string)$userAgent)) {
             return [
                 'name' => 'google',
@@ -1993,83 +1963,42 @@ class WireWall extends WireData implements Module, ConfigurableModule {
                 'suffixes' => ['.search.msn.com'],
             ];
         }
-        if (preg_match('/uptimerobot/i', (string)$userAgent)) {
-            return [
-                'name' => 'uptimerobot',
-                'type' => 'uptimerobot-api',
-            ];
+        $monitorProvider = $this->getMonitorProviderVerifier()->getProviderForUserAgent($userAgent);
+        if ($monitorProvider) {
+            return $monitorProvider;
         }
         return null;
     }
 
     /**
-     * Verify UptimeRobot checkers against their official IP metadata API.
+     * Load verifier for synthetic monitor providers with official IP feeds.
      */
-    protected function verifyUptimeRobotIdentity($ip) {
-        $cacheKey = 'botverify_uptimerobot_' . sha1($ip);
-        $cached = $this->cacheGet($cacheKey);
-        if (is_array($cached) && isset($cached['status'])) {
-            $cached['cached'] = true;
-            return $cached;
+    protected function getMonitorProviderVerifier() {
+        if ($this->monitorProviderVerifier instanceof WireWallMonitorProviderVerifier) {
+            return $this->monitorProviderVerifier;
         }
 
-        $prefixes = $this->getUptimeRobotPrefixes();
-        $verified = false;
-        foreach ($prefixes as $prefix) {
-            if ($this->matchIP($ip, $prefix)) {
-                $verified = true;
-                break;
-            }
-        }
-
-        $result = [
-            'provider' => 'uptimerobot',
-            'status' => $verified ? 'verified' : 'unverified',
-            'method' => 'official-ip-api',
-            'cached' => false,
-        ];
-
-        $this->cacheSet($cacheKey, $result, $verified ? 86400 : 3600);
-        return $result;
-    }
-
-    /**
-     * Fetch and cache UptimeRobot monitoring IP prefixes.
-     */
-    protected function getUptimeRobotPrefixes() {
-        $cacheKey = 'botverify_uptimerobot_prefixes';
-        $cached = $this->cacheGet($cacheKey);
-        if (is_array($cached)) {
-            return $cached;
-        }
-
-        $prefixes = [];
-        try {
-            $http = new WireHttp();
-            $http->setTimeout(2);
-            $response = $http->get('https://api.uptimerobot.com/meta/ips');
-            if ($response) {
-                $data = json_decode($response, true);
-                if (is_array($data) && !empty($data['prefixes']) && is_array($data['prefixes'])) {
-                    foreach ($data['prefixes'] as $entry) {
-                        if (!empty($entry['ip_prefix'])) {
-                            $prefixes[] = trim((string)$entry['ip_prefix']);
-                        }
-                        if (!empty($entry['ipv6_prefix'])) {
-                            $prefixes[] = trim((string)$entry['ipv6_prefix']);
-                        }
-                    }
+        require_once __DIR__ . '/src/WireWallMonitorProviderVerifier.php';
+        $this->monitorProviderVerifier = new WireWallMonitorProviderVerifier(
+            function($url) {
+                $http = new WireHttp();
+                $http->setTimeout(2);
+                return $http->get($url);
+            },
+            function($key) {
+                return $this->cacheGet($key);
+            },
+            function($key, $value, $expire) {
+                return $this->cacheSet($key, $value, $expire);
+            },
+            [$this->getIpMatcher(), 'match'],
+            function($message) {
+                if ($this->enable_stats_logging) {
+                    $this->wire('log')->save('wirewall', $message);
                 }
             }
-        } catch (\Exception $e) {
-            if ($this->enable_stats_logging) {
-                $this->wire('log')->save('wirewall', 'UptimeRobot IP API error: ' . $e->getMessage());
-            }
-        }
-
-        $prefixes = array_values(array_unique(array_filter($prefixes)));
-        $this->cacheSet($cacheKey, $prefixes, $prefixes ? 86400 : 3600);
-        return $prefixes;
+        );
+        return $this->monitorProviderVerifier;
     }
 
     /**
@@ -2184,33 +2113,16 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      * header quirks, but a browser family name is trivial for bots to spoof.
      */
     protected static function isUnsafeBrowserAllowPattern($pattern) {
-        $pattern = strtolower(trim((string)$pattern));
-        return in_array($pattern, [
-            'firefox',
-            'brave',
-            'chrome',
-            'chromium',
-            'safari',
-            'edge',
-            'edg',
-            'opera',
-            'opr',
-        ], true);
+        require_once __DIR__ . '/src/Support/WireWallRuleMatcher.php';
+        return WireWallRuleMatcher::isUnsafeBrowserAllowPattern($pattern);
     }
 
     /**
      * Extract common browser-family tokens from legacy allowlist text.
      */
     protected static function extractUnsafeBrowserAllowPatterns($text) {
-        $patterns = [];
-        foreach (self::parseRuleText((string)$text) as $line) {
-            foreach (preg_split('/[\s,;|]+/', $line, -1, PREG_SPLIT_NO_EMPTY) as $token) {
-                if (self::isUnsafeBrowserAllowPattern($token)) {
-                    $patterns[] = trim($token);
-                }
-            }
-        }
-        return array_values(array_unique($patterns));
+        require_once __DIR__ . '/src/Support/WireWallRuleMatcher.php';
+        return WireWallRuleMatcher::extractUnsafeBrowserAllowPatterns($text);
     }
 
     /**
@@ -2462,23 +2374,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      * Match IP (supports exact, wildcard *, and CIDR notation)
      */
     protected function matchIP($ip, $pattern) {
-        $pattern = trim($pattern);
-        
-        // Exact match
-        if ($ip === $pattern) return true;
-        
-        // CIDR notation (e.g., 192.168.0.0/16)
-        if (strpos($pattern, '/') !== false) {
-            return $this->matchCIDR($ip, $pattern);
-        }
-        
-        // Wildcard (e.g., 192.168.*.* or 192.168.1.*)
-        if (strpos($pattern, '*') !== false) {
-            $regex = '/^' . str_replace(['.', '*'], ['\.', '.*'], $pattern) . '$/';
-            return preg_match($regex, $ip) === 1;
-        }
-        
-        return false;
+        return $this->getIpMatcher()->match($ip, $pattern);
     }
 
     /**
@@ -2489,54 +2385,14 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      * IPv6: 2601:41:c780:6740::/64, 2001:db8::/32
      */
     protected function matchCIDR($ip, $cidr) {
-        // Split CIDR into subnet and prefix length
-        if (strpos($cidr, '/') === false) {
-            return false;
-        }
-        
-        list($subnet, $bits) = explode('/', $cidr);
-        $bits = (int)$bits;
-        
-        // Detect IP version
-        $isIPv6 = strpos($ip, ':') !== false;
-        $isSubnetIPv6 = strpos($subnet, ':') !== false;
-        
-        // IP and subnet must be same version
-        if ($isIPv6 !== $isSubnetIPv6) {
-            return false;
-        }
-        
-        if ($isIPv6) {
-            // IPv6 CIDR matching
-            return $this->matchIPv6CIDR($ip, $subnet, $bits);
-        } else {
-            // IPv4 CIDR matching (original logic)
-            return $this->matchIPv4CIDR($ip, $subnet, $bits);
-        }
+        return $this->getIpMatcher()->matchCIDR($ip, $cidr);
     }
     
     /**
      * Match IPv4 CIDR
      */
     protected function matchIPv4CIDR($ip, $subnet, $bits) {
-        // Convert to long integers
-        $ip_long = ip2long($ip);
-        $subnet_long = ip2long($subnet);
-        
-        if ($ip_long === false || $subnet_long === false) {
-            return false;
-        }
-        
-        // Validate prefix length (0-32 for IPv4)
-        if ($bits < 0 || $bits > 32) {
-            return false;
-        }
-        
-        // Create mask
-        $mask = -1 << (32 - $bits);
-        $subnet_long &= $mask;
-        
-        return ($ip_long & $mask) == $subnet_long;
+        return $this->getIpMatcher()->matchIPv4CIDR($ip, $subnet, $bits);
     }
     
     /**
@@ -2545,33 +2401,20 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      * Example: 2601:41:c780:6740::/64
      */
     protected function matchIPv6CIDR($ip, $subnet, $bits) {
-        // Convert IP addresses to binary format
-        $ip_bin = @inet_pton($ip);
-        $subnet_bin = @inet_pton($subnet);
-        
-        if ($ip_bin === false || $subnet_bin === false) {
-            return false;
+        return $this->getIpMatcher()->matchIPv6CIDR($ip, $subnet, $bits);
+    }
+
+    /**
+     * Load shared IP matcher utility.
+     */
+    protected function getIpMatcher() {
+        if ($this->ipMatcher instanceof WireWallIpMatcher) {
+            return $this->ipMatcher;
         }
-        
-        // Validate prefix length (0-128 for IPv6)
-        if ($bits < 0 || $bits > 128) {
-            return false;
-        }
-        
-        // Convert binary to bit string
-        $ip_bits = '';
-        $subnet_bits = '';
-        
-        for ($i = 0; $i < strlen($ip_bin); $i++) {
-            $ip_bits .= str_pad(decbin(ord($ip_bin[$i])), 8, '0', STR_PAD_LEFT);
-            $subnet_bits .= str_pad(decbin(ord($subnet_bin[$i])), 8, '0', STR_PAD_LEFT);
-        }
-        
-        // Compare only the prefix bits
-        $ip_prefix = substr($ip_bits, 0, $bits);
-        $subnet_prefix = substr($subnet_bits, 0, $bits);
-        
-        return $ip_prefix === $subnet_prefix;
+
+        require_once __DIR__ . '/src/Support/WireWallIpMatcher.php';
+        $this->ipMatcher = new WireWallIpMatcher();
+        return $this->ipMatcher;
     }
 
     /**
@@ -2598,28 +2441,16 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      * Parse rule text without instance state (also used by static config UI).
      */
     protected static function parseRuleText($text) {
-        $rules = [];
-        foreach (explode("\n", (string)$text) as $line) {
-            $line = trim($line);
-            if ($line !== '' && !str_starts_with($line, '#')) {
-                $rules[] = $line;
-            }
-        }
-        return $rules;
+        require_once __DIR__ . '/src/Support/WireWallRuleMatcher.php';
+        return WireWallRuleMatcher::parseRuleText($text);
     }
 
     /**
      * Match pattern with wildcard support
      */
     protected function matchPattern($text, $pattern) {
-        if ($text === $pattern) return true;
-        
-        if (strpos($pattern, '*') !== false) {
-            $regex = '/^' . str_replace('\*', '.*', preg_quote($pattern, '/')) . '$/i';
-            return preg_match($regex, $text) === 1;
-        }
-        
-        return false;
+        require_once __DIR__ . '/src/Support/WireWallRuleMatcher.php';
+        return WireWallRuleMatcher::matchPattern($text, $pattern);
     }
 
     /**
@@ -3061,14 +2892,6 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             return;
         }
 
-        $dir = $this->getTrafficHistoryPath();
-        if (!is_dir($dir) && !@mkdir($dir, 0700, true)) {
-            return;
-        }
-        @chmod($dir, 0700);
-
-        $this->protectTrafficHistoryDirectory($dir);
-
         $requestUri = $_SERVER['REQUEST_URI'] ?? '';
         $path = parse_url($requestUri, PHP_URL_PATH) ?: '';
         $query = parse_url($requestUri, PHP_URL_QUERY) ?: '';
@@ -3108,29 +2931,14 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             'forwarded_for' => $_SERVER['HTTP_X_FORWARDED_FOR'] ?? '',
         ];
 
-        $json = json_encode($record, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-        if ($json === false) {
-            return;
-        }
-
-        $file = $dir . 'traffic-' . date('Y-m-d') . '.jsonl';
-        @file_put_contents($file, $json . "\n", FILE_APPEND | LOCK_EX);
-        @chmod($file, 0600);
+        $this->getTrafficHistoryStore()->writeRecord($record);
     }
 
     /**
      * Prevent direct web reads from the traffic history directory when possible.
      */
     protected function protectTrafficHistoryDirectory($dir) {
-        $htaccess = $dir . '.htaccess';
-        if (!file_exists($htaccess)) {
-            @file_put_contents($htaccess, "Require all denied\nDeny from all\n", LOCK_EX);
-        }
-
-        $index = $dir . 'index.php';
-        if (!file_exists($index)) {
-            @file_put_contents($index, "<?php namespace ProcessWire; http_response_code(403); exit;\n", LOCK_EX);
-        }
+        $this->getTrafficHistoryStore()->protectDirectory($dir);
     }
 
     /**
@@ -3612,9 +3420,9 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f->name = 'allowedUserAgents';
         $f->label = 'Known Bot User-Agents';
         $f->description = 'User-Agent substrings that skip bot-category and fake-browser heuristics only. Bans, triggers, rate limits, network checks, geo rules, and explicit blocks still apply.';
-        $f->notes = 'Examples: Googlebot, Bingbot, UptimeRobot, facebookexternalhit, Slackbot. Googlebot/Bingbot require cached forward-confirmed reverse DNS; UptimeRobot requires a match in the official UptimeRobot IP API.';
+        $f->notes = 'Examples: Googlebot, Chrome-Lighthouse, Bingbot, UptimeRobot, Pingdom, StatusCake, DatadogSynthetics, NewRelicSynthetics, facebookexternalhit, Slackbot. Googlebot/Bingbot and Chrome-Lighthouse require cached forward-confirmed reverse DNS; supported monitors require a match in their official IP feeds.';
         $f->rows = 6;
-        $f->value = isset($data['allowedUserAgents']) ? $data['allowedUserAgents'] : "Googlebot\nBingbot\nUptimeRobot\nYandex\nfacebookexternalhit\nSlackbot\nLinkedInBot\nTwitterbot\nWhatsApp\nApplebot";
+        $f->value = isset($data['allowedUserAgents']) ? $data['allowedUserAgents'] : "Googlebot\nChrome-Lighthouse\nBingbot\nUptimeRobot\nPingdom\nStatusCake\nDatadogSynthetics\nNewRelicSynthetics\nYandex\nfacebookexternalhit\nSlackbot\nLinkedInBot\nTwitterbot\nWhatsApp\nApplebot";
         $fieldset->add($f);
 
         $f = $modules->get('InputfieldTextarea');

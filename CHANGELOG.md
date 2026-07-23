@@ -4,6 +4,37 @@ All notable changes to WireWall are documented here.
 
 ---
 
+## 1.11.0 — July 23, 2026
+
+### New Features
+
+- Added verified synthetic-monitor provider support for Pingdom, StatusCake, Datadog Synthetics, and New Relic Synthetics.
+- Added cached forward-confirmed reverse DNS verification for Google PageSpeed Insights `Chrome-Lighthouse` requests.
+- Kept monitor exceptions scoped: verified monitors may skip proxy, datacenter, ASN, and bot/fake-browser heuristics while still obeying bans, trigger rules, rate limits, IP blacklists, explicit blocks, and geo policy.
+
+### Architecture
+
+- Moved official monitor IP-feed verification into `src/WireWallMonitorProviderVerifier.php` as the first step away from the main module monolith.
+- Added `src/Dashboard/WireWallDashboardStats.php` for dashboard log tailing, parsing, aggregation, and TTL formatting.
+- Added `src/Storage/WireWallCacheInspector.php` for dashboard cache, active-ban, and traffic-history inventory.
+- Added `src/Storage/WireWallTrafficHistoryStore.php` for private traffic-history paths, legacy migration, directory protection, and JSONL writes.
+- Added `src/Storage/WireWallTrafficReportService.php` for dashboard traffic report listing, summaries, last-24h exports, and ZIP packaging.
+- Added `src/Support/WireWallIpMatcher.php` for shared exact, wildcard, IPv4 CIDR, and IPv6 CIDR matching.
+- Added `src/Support/WireWallRuleMatcher.php` for shared rule parsing, wildcard matching, and unsafe browser allowlist extraction.
+- Kept existing `WireWall` traffic-history methods as compatibility wrappers while moving file-storage responsibilities out of the main module.
+- Moved the dashboard stylesheet and chart JavaScript from inline PHP output to `assets/dashboard.css` and `assets/dashboard.js`.
+
+### Documentation
+
+- Updated Known Bot User-Agent examples and troubleshooting guidance for supported synthetic monitor services and PageSpeed Insights.
+- Documented the ProcessWire numeric version mapping for `1.10.0` as `1100` and `1.11.0` as `1110` to avoid ambiguity after `1.9.x`.
+
+### Tests
+
+- Added verification coverage for Lighthouse DNS checks, monitor IP feeds, shared IP/rule matching, and storage coverage for private-path fallback, JSONL file creation, and traffic directory protection files.
+
+---
+
 ## 1.9.0 — July 23, 2026
 
 ### New Features
