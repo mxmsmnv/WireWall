@@ -4,6 +4,15 @@ All notable changes to WireWall are documented here.
 
 ---
 
+## 1.8.2 — July 23, 2026
+
+### Bug Fixes
+
+- Fixed the ProcessWire module configuration page crashing with `Using $this when not in object context`.
+- Removed all instance references from the static configuration callback and added a regression test for static-context safety.
+
+---
+
 ## 1.8.1 — July 23, 2026
 
 ### Security
