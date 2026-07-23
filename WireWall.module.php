@@ -1,7 +1,7 @@
 <?php namespace ProcessWire;
 
 /**
- * WireWall 1.8.0 - Advanced Traffic Firewall
+ * WireWall 1.8.1 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -13,7 +13,7 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.8.0
+ * @version 1.8.1
  * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @date April 24, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
@@ -25,7 +25,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 180,
+            'version' => 181,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -85,10 +85,91 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     }
 
     /**
-     * Get traffic history directory path (AI-friendly request history)
+     * Get private persistent data outside the web document root.
+     */
+    protected function getPrivateDataPath() {
+        $config = $this->wire('config');
+        $configured = trim((string)($config->wireWallPrivateDataPath ?? ''));
+        if ($configured !== '') {
+            $isAbsolute = str_starts_with($configured, '/')
+                || (bool)preg_match('/^[A-Za-z]:[\/\\\\]/', $configured);
+            if ($isAbsolute) {
+                return rtrim($configured, '/\\') . DIRECTORY_SEPARATOR;
+            }
+            $this->wire('log')->save(
+                'wirewall',
+                'Ignoring relative wireWallPrivateDataPath; configure an absolute path.'
+            );
+        }
+
+        $root = rtrim((string)$config->paths->root, '/\\');
+        return dirname($root) . DIRECTORY_SEPARATOR . basename($root)
+            . '-wirewall-private' . DIRECTORY_SEPARATOR;
+    }
+
+    /**
+     * Get traffic history directory path (AI-friendly request history).
      */
     protected function getTrafficHistoryPath() {
-        return $this->getDataPath() . 'traffic/';
+        return $this->getPrivateDataPath() . 'traffic' . DIRECTORY_SEPARATOR;
+    }
+
+    /**
+     * Public read-only path accessor shared with the admin dashboard.
+     */
+    public function getTrafficHistoryDirectory() {
+        return $this->getTrafficHistoryPath();
+    }
+
+    /**
+     * Move legacy public traffic files outside the document root.
+     */
+    protected function migrateTrafficHistoryToPrivateStorage() {
+        $legacy = $this->getDataPath() . 'traffic/';
+        $target = $this->getTrafficHistoryPath();
+        if ($legacy === $target) {
+            return;
+        }
+
+        $parent = dirname(rtrim($target, '/\\'));
+        if (!is_dir($parent) && !@mkdir($parent, 0700, true)) {
+            $this->wire('log')->save('wirewall', "Could not create private data directory: {$parent}");
+            return;
+        }
+        @chmod($parent, 0700);
+
+        if (is_dir($legacy) && !is_dir($target)) {
+            if (!@rename($legacy, $target)) {
+                $this->wire('log')->save(
+                    'wirewall',
+                    "Could not move legacy traffic history from {$legacy} to {$target}"
+                );
+                return;
+            }
+        } elseif (is_dir($legacy) && is_dir($target)) {
+            foreach (scandir($legacy) as $file) {
+                if (!preg_match('/^traffic-\d{4}-\d{2}-\d{2}\.jsonl$/', $file)) {
+                    continue;
+                }
+                $destination = $target . $file;
+                if (file_exists($destination)) {
+                    $destination = $target . 'legacy-' . date('Ymd-His') . '-' . $file;
+                }
+                if (!@rename($legacy . $file, $destination)) {
+                    $this->wire('log')->save('wirewall', "Could not move legacy traffic file: {$file}");
+                }
+            }
+        }
+
+        if (!is_dir($target) && !@mkdir($target, 0700, true)) {
+            $this->wire('log')->save('wirewall', "Could not create private traffic directory: {$target}");
+            return;
+        }
+
+        @chmod($target, 0700);
+        foreach (glob($target . '*.jsonl') ?: [] as $file) {
+            @chmod($file, 0600);
+        }
     }
 
     /**
@@ -257,7 +338,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
 
         return [
             'schema' => 'wirewall_settings_export_v1',
-            'module_version' => '1.8.0',
+            'module_version' => '1.8.1',
             'module_version_number' => self::getModuleInfo()['version'],
             'exported_at' => date('c'),
             'settings' => $settings,
@@ -400,6 +481,8 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         if (isset($data['allowTrustedModules'])) {
             $this->allowTrustedModules = $data['allowTrustedModules'];
         }
+
+        $this->migrateTrafficHistoryToPrivateStorage();
         
         // Create cache directory if it doesn't exist
         $cachePath = $this->wire('config')->paths->cache . 'WireWall/';
@@ -2884,7 +2967,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      * Store AI-friendly request history outside ProcessWire logs.
      *
      * Writes one JSON object per line to:
-     * /site/assets/WireWall/traffic/traffic-YYYY-MM-DD.jsonl
+     * ../SITE-DIRECTORY-wirewall-private/traffic/traffic-YYYY-MM-DD.jsonl
      */
     protected function recordTrafficHistory($ip, $country, $asn, $allowed, $reason, $userAgent = '') {
         if (!($this->enable_traffic_history ?? true)) {
@@ -2892,9 +2975,10 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         }
 
         $dir = $this->getTrafficHistoryPath();
-        if (!is_dir($dir) && !@mkdir($dir, 0755, true)) {
+        if (!is_dir($dir) && !@mkdir($dir, 0700, true)) {
             return;
         }
+        @chmod($dir, 0700);
 
         $this->protectTrafficHistoryDirectory($dir);
 
@@ -2944,6 +3028,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
 
         $file = $dir . 'traffic-' . date('Y-m-d') . '.jsonl';
         @file_put_contents($file, $json . "\n", FILE_APPEND | LOCK_EX);
+        @chmod($file, 0600);
     }
 
     /**
@@ -3088,7 +3173,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f->name = 'enable_traffic_history';
         $f->label = 'Save Traffic History';
         $f->description = 'Save allowed and blocked public requests as daily JSONL files for later AI analysis.';
-        $f->notes = 'Stored outside ProcessWire logs: /site/assets/WireWall/traffic/traffic-YYYY-MM-DD.jsonl';
+        $f->notes = 'Stored outside the web document root in WireWall private data: traffic/traffic-YYYY-MM-DD.jsonl';
         $f->checked = (!isset($data['enable_traffic_history']) || $data['enable_traffic_history']) ? 'checked' : '';
         $fieldset->add($f);
 

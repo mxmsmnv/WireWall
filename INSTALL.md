@@ -45,6 +45,11 @@ WireWall also creates a dedicated `wirewall_settings` table. On upgrades, the
 existing ProcessWire module configuration is imported automatically and retained
 as a synchronized fallback.
 
+Traffic history is stored outside the document root in a sibling directory named
+`SITE-DIRECTORY-wirewall-private/traffic/`. Existing public traffic history is
+moved automatically. You can set `$config->wireWallPrivateDataPath` to another
+absolute writable path before installation when required by the host.
+
 ---
 
 ## Step 3 — Initial configuration
