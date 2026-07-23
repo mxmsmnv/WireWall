@@ -4,6 +4,17 @@ All notable changes to WireWall are documented here.
 
 ---
 
+## 1.7.1 — July 23, 2026
+
+### Security and Compatibility
+
+- Added cached forward-confirmed reverse DNS verification for configured Googlebot and Bingbot User-Agent exceptions.
+- Unverified Google/Bing crawler User-Agents no longer receive a UA-only known-bot exception.
+- Verified configured crawlers may skip proxy, datacenter, and ASN heuristics while still obeying bans, trigger rules, rate limits, IP blacklists, explicit path/User-Agent/referer rules, and geo policy.
+- Added bot verification provider/status metadata to traffic history for incident analysis.
+
+---
+
 ## 1.7.0 — July 23, 2026
 
 ### New Features

@@ -22,6 +22,10 @@ interface ConfigurableModule {}
 require dirname(__DIR__) . '/WireWall.module.php';
 
 final class TestableWireWall extends WireWall {
+    private array $testCache = [];
+    private array $reverseDNS = [];
+    private array $forwardDNS = [];
+
     public function configureExceptions(
         string $knownUserAgents = '',
         string $knownIPs = '',
@@ -34,8 +38,13 @@ final class TestableWireWall extends WireWall {
         $this->compatibilityUserAgents = $compatibilityUserAgents;
     }
 
-    public function knownBot(string $userAgent, string $ip = '203.0.113.10', ?string $asn = null): bool {
-        return $this->isAllowedBot($userAgent, $ip, $asn);
+    public function knownBot(
+        string $userAgent,
+        string $ip = '203.0.113.10',
+        ?string $asn = null,
+        bool $verifiedIdentity = false
+    ): bool {
+        return $this->isAllowedBot($userAgent, $ip, $asn, $verifiedIdentity);
     }
 
     public function compatibility(string $userAgent): bool {
@@ -48,6 +57,32 @@ final class TestableWireWall extends WireWall {
 
     public function migrate170(array $data): array {
         return $this->prepareConfigFor170($data);
+    }
+
+    public function configureDNS(string $ip, string $hostname, array $forwardAddresses): void {
+        $this->reverseDNS[$ip] = $hostname;
+        $this->forwardDNS[$hostname] = $forwardAddresses;
+    }
+
+    public function verifyBot(string $userAgent, string $ip): array {
+        return $this->verifyKnownBotIdentity($userAgent, $ip);
+    }
+
+    protected function resolveReverseDNS($ip) {
+        return $this->reverseDNS[$ip] ?? $ip;
+    }
+
+    protected function resolveForwardDNS($hostname) {
+        return $this->forwardDNS[$hostname] ?? [];
+    }
+
+    protected function cacheGet($key) {
+        return $this->testCache[$key] ?? null;
+    }
+
+    protected function cacheSet($key, $value, $expire) {
+        $this->testCache[$key] = $value;
+        return true;
     }
 
     public function configureGlobalRules(array $settings): void {
@@ -96,10 +131,31 @@ if (($argv[1] ?? '') === '--bare-410') {
 }
 
 $wirewall->configureExceptions("Googlebot\nFirefox, Brave", '', '', '');
-assertSameValue(true, $wirewall->knownBot('Mozilla/5.0 Googlebot/2.1'), 'Known bot UA should be scoped as a bot exception');
+assertSameValue(false, $wirewall->knownBot('Mozilla/5.0 Googlebot/2.1'), 'Verifiable bot UA must not be trusted before identity verification');
 assertSameValue(false, $wirewall->knownBot('Mozilla/5.0 Firefox/152.0'), 'Browser family must not become a known-bot bypass');
 assertSameValue(true, $wirewall->compatibility('Mozilla/5.0 Firefox/152.0'), 'Legacy browser family should migrate to compatibility scope');
 assertSameValue(true, $wirewall->compatibility('Mozilla/5.0 Brave/1.80'), 'Comma-delimited legacy browser names should migrate to compatibility scope');
+
+$googleIP = '66.249.66.1';
+$googleHost = 'crawl-66-249-66-1.googlebot.com';
+$wirewall->configureDNS($googleIP, $googleHost, [$googleIP]);
+$googleVerification = $wirewall->verifyBot('Mozilla/5.0 Googlebot/2.1', $googleIP);
+assertSameValue('verified', $googleVerification['status'], 'Googlebot should pass forward-confirmed reverse DNS');
+assertSameValue(true, $wirewall->knownBot('Mozilla/5.0 Googlebot/2.1', $googleIP, null, true), 'Verified Googlebot may receive the configured known-bot exception');
+$cachedGoogleVerification = $wirewall->verifyBot('Mozilla/5.0 Googlebot/2.1', $googleIP);
+assertSameValue(true, $cachedGoogleVerification['cached'], 'Bot verification result should be cached');
+
+$spoofedIP = '203.0.113.55';
+$spoofedHost = 'crawl.googlebot.com.attacker.example';
+$wirewall->configureDNS($spoofedIP, $spoofedHost, [$spoofedIP]);
+$spoofedVerification = $wirewall->verifyBot('Mozilla/5.0 Googlebot/2.1', $spoofedIP);
+assertSameValue('unverified', $spoofedVerification['status'], 'A hostname containing but not ending in the official domain must fail');
+
+$bingIP = '157.55.39.1';
+$bingHost = 'msnbot-157-55-39-1.search.msn.com';
+$wirewall->configureDNS($bingIP, $bingHost, [$bingIP]);
+$bingVerification = $wirewall->verifyBot('Mozilla/5.0 bingbot/2.0', $bingIP);
+assertSameValue('verified', $bingVerification['status'], 'Bingbot should pass forward-confirmed reverse DNS');
 
 $migrated = $wirewall->migrate170([
     'version' => 160,

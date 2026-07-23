@@ -1,7 +1,7 @@
 <?php namespace ProcessWire;
 
 /**
- * WireWall 1.7.0 - Advanced Traffic Firewall
+ * WireWall 1.7.1 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -13,7 +13,7 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.7.0
+ * @version 1.7.1
  * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @date April 24, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
@@ -25,7 +25,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 170,
+            'version' => 171,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -41,6 +41,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     // Current request data
     protected $currentAS = null;
     protected $currentCountry = null;
+    protected $currentBotVerification = null;
     
     // Allow AJAX from trusted ProcessWire modules (default: enabled)
     protected $allowTrustedModules = true;
@@ -425,12 +426,6 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $this->currentAS = $asn;
         $this->currentCountry = $country;
         
-        // Known-bot exceptions skip bot/fake-browser heuristics only. They no
-        // longer bypass bans, trigger rules, rate limits, network checks, or
-        // explicit path/UA/referer blocks. Use IP Whitelist for a full bypass.
-        $knownBotException = $this->isAllowedBot($userAgent, $ip, $asn);
-        $compatibilityException = $this->matchesCompatibilityUserAgent($userAgent);
-        
         // === PRIORITY 2: ACTIVE TEMPORARY BAN ===
         if ($this->isIPBanned($ip)) {
             $this->blockAccess('temporary-ban', $ip, $country, $asn, $userAgent);
@@ -455,6 +450,15 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             $this->blockAccess('ip', $ip, null, null, $userAgent);
             return;
         }
+
+        // Resolve scoped exceptions only after cheap abuse checks. This avoids
+        // DNS work for already banned, triggered, rate-limited, or blacklisted
+        // requests that merely spoof a crawler User-Agent.
+        $botVerification = $this->verifyKnownBotIdentity($userAgent, $ip);
+        $verifiedKnownBot = ($botVerification['status'] ?? '') === 'verified';
+        $knownBotException = $this->isAllowedBot($userAgent, $ip, $asn, $verifiedKnownBot);
+        $verifiedKnownBotException = $knownBotException && $verifiedKnownBot;
+        $compatibilityException = $this->matchesCompatibilityUserAgent($userAgent);
         
         // === PRIORITY 5: JS CHALLENGE CHECK ===
         if ($this->js_challenge_enabled && !$knownBotException && !$compatibilityException) {
@@ -466,19 +470,19 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         }
         
         // === PRIORITY 6: VPN/PROXY/TOR DETECTION ===
-        if ($this->block_proxy_vpn_tor && $this->isProxyVPNTor($ip)) {
+        if (!$verifiedKnownBotException && $this->block_proxy_vpn_tor && $this->isProxyVPNTor($ip)) {
             $this->blockAccess('proxy-vpn-tor', $ip, $country, $asn, $userAgent);
             return;
         }
         
         // === PRIORITY 7: DATACENTER DETECTION ===
-        if ($this->block_datacenters && $this->isDatacenter($ip, $asn)) {
+        if (!$verifiedKnownBotException && $this->block_datacenters && $this->isDatacenter($ip, $asn)) {
             $this->blockAccess('datacenter', $ip, $country, $asn, $userAgent);
             return;
         }
         
         // === PRIORITY 8: ASN BLOCKING ===
-        if ($asn && $this->isBlockedASN($asn)) {
+        if (!$verifiedKnownBotException && $asn && $this->isBlockedASN($asn)) {
             $this->blockAccess('asn-blocked', $ip, $country, $asn, $userAgent);
             return;
         }
@@ -520,7 +524,9 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         }
         
         // === ACCESS ALLOWED ===
-        $allowedReason = $knownBotException ? 'known-bot' : ($compatibilityException ? 'compatibility-exception' : '');
+        $allowedReason = $verifiedKnownBotException
+            ? 'verified-known-bot'
+            : ($knownBotException ? 'known-bot' : ($compatibilityException ? 'compatibility-exception' : ''));
         $this->recordTrafficHistory($ip, $country, $asn, true, $allowedReason, $userAgent);
         if ($this->enable_stats_logging) {
             $this->logAccess($ip, $country, $asn, true, $allowedReason, $userAgent);
@@ -1629,13 +1635,110 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     }
 
     /**
+     * Verify supported crawler identities with forward-confirmed reverse DNS.
+     *
+     * Successful results are cached for 24 hours; failures use a short cache
+     * so temporary DNS problems do not cause a lookup on every request.
+     */
+    protected function verifyKnownBotIdentity($userAgent, $ip) {
+        $provider = $this->getVerifiableBotProvider($userAgent);
+        if (!$provider || !filter_var($ip, FILTER_VALIDATE_IP)) {
+            $this->currentBotVerification = null;
+            return [];
+        }
+
+        $cacheKey = 'botverify_' . $provider['name'] . '_' . sha1($ip);
+        $cached = $this->cacheGet($cacheKey);
+        if (is_array($cached) && isset($cached['status'])) {
+            $cached['cached'] = true;
+            $this->currentBotVerification = $cached;
+            return $cached;
+        }
+
+        $hostname = strtolower(rtrim((string)$this->resolveReverseDNS($ip), '.'));
+        $validSuffix = false;
+        foreach ($provider['suffixes'] as $suffix) {
+            if ($hostname === ltrim($suffix, '.') || str_ends_with($hostname, $suffix)) {
+                $validSuffix = true;
+                break;
+            }
+        }
+
+        $forwardConfirmed = false;
+        if ($validSuffix) {
+            foreach ($this->resolveForwardDNS($hostname) as $resolvedIP) {
+                if ($this->ipAddressesEqual($ip, $resolvedIP)) {
+                    $forwardConfirmed = true;
+                    break;
+                }
+            }
+        }
+
+        $result = [
+            'provider' => $provider['name'],
+            'status' => ($validSuffix && $forwardConfirmed) ? 'verified' : 'unverified',
+            'cached' => false,
+        ];
+        $this->cacheSet($cacheKey, $result, $result['status'] === 'verified' ? 86400 : 3600);
+        $this->currentBotVerification = $result;
+        return $result;
+    }
+
+    /**
+     * Return verification rules for crawler User-Agents with official DNS guidance.
+     */
+    protected function getVerifiableBotProvider($userAgent) {
+        if (preg_match('/googlebot|google-inspectiontool/i', (string)$userAgent)) {
+            return [
+                'name' => 'google',
+                'suffixes' => ['.googlebot.com', '.google.com', '.googleusercontent.com'],
+            ];
+        }
+        if (preg_match('/bingbot|msnbot|adidxbot/i', (string)$userAgent)) {
+            return [
+                'name' => 'bing',
+                'suffixes' => ['.search.msn.com'],
+            ];
+        }
+        return null;
+    }
+
+    /**
+     * DNS methods are isolated so verification behavior can be regression-tested.
+     */
+    protected function resolveReverseDNS($ip) {
+        return @gethostbyaddr($ip);
+    }
+
+    protected function resolveForwardDNS($hostname) {
+        $addresses = @gethostbynamel($hostname) ?: [];
+        if (function_exists('dns_get_record') && defined('DNS_AAAA')) {
+            $records = @dns_get_record($hostname, DNS_AAAA);
+            if (is_array($records)) {
+                foreach ($records as $record) {
+                    if (!empty($record['ipv6'])) {
+                        $addresses[] = $record['ipv6'];
+                    }
+                }
+            }
+        }
+        return array_values(array_unique($addresses));
+    }
+
+    protected function ipAddressesEqual($first, $second) {
+        $firstBinary = @inet_pton((string)$first);
+        $secondBinary = @inet_pton((string)$second);
+        return $firstBinary !== false && $secondBinary !== false && hash_equals($firstBinary, $secondBinary);
+    }
+
+    /**
      * Check whether a request matches a known-bot exception.
      *
      * A match skips bot-category and fake-browser heuristics only. It does not
      * bypass bans, triggers, rate limiting, network checks, geo rules, or
      * explicit path/User-Agent/referer blocks.
      */
-    protected function isAllowedBot($userAgent, $ip, $asn = null) {
+    protected function isAllowedBot($userAgent, $ip, $asn = null, $verifiedIdentity = false) {
         // Check allowed User-Agents
         if ($this->allowedUserAgents) {
             $allowedAgents = $this->parseRules($this->allowedUserAgents);
@@ -1646,6 +1749,11 @@ class WireWall extends WireData implements Module, ConfigurableModule {
                 
                 // Case-insensitive match
                 if (stripos($userAgent, $pattern) !== false) {
+                    // Google/Bing crawler identities must pass forward-confirmed
+                    // reverse DNS before a UA-only rule receives any exception.
+                    if ($this->getVerifiableBotProvider($userAgent) && !$verifiedIdentity) {
+                        continue;
+                    }
                     return true;
                 }
             }
@@ -2603,6 +2711,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             'unix_time' => time(),
             'status' => $allowed ? 'allowed' : 'blocked',
             'reason' => (string)$reason,
+            'bot_verification' => $this->currentBotVerification,
             'ip' => (string)$ip,
             'country' => $country ?: null,
             'city' => $cityData['city'] ?? null,
@@ -3126,7 +3235,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f->name = 'allowedUserAgents';
         $f->label = 'Known Bot User-Agents';
         $f->description = 'User-Agent substrings that skip bot-category and fake-browser heuristics only. Bans, triggers, rate limits, network checks, geo rules, and explicit blocks still apply.';
-        $f->notes = 'Examples: Googlebot, Bingbot, facebookexternalhit, Slackbot. User-Agent text is spoofable; stronger bot verification is recommended.';
+        $f->notes = 'Examples: Googlebot, Bingbot, facebookexternalhit, Slackbot. Googlebot/Bingbot UA matches require cached forward-confirmed reverse DNS; other User-Agent text remains spoofable.';
         $f->rows = 6;
         $f->value = isset($data['allowedUserAgents']) ? $data['allowedUserAgents'] : "Googlebot\nBingbot\nYandex\nfacebookexternalhit\nSlackbot\nLinkedInBot\nTwitterbot\nWhatsApp\nApplebot";
         $fieldset->add($f);

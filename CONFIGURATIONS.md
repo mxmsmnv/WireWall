@@ -335,6 +335,11 @@ User-Agent text is spoofable. Known bot rules should not be treated as proof of
 identity, and broad browser-family names belong only in compatibility exceptions.
 Prefer known bot IP/CIDR data where it is maintained and reliable.
 
+Configured Googlebot and Bingbot User-Agent rules use cached forward-confirmed
+reverse DNS. A UA-only match that fails verification receives no exception.
+Verified configured crawlers may skip proxy/datacenter/ASN heuristics, but they
+still obey bans, triggers, rate limits, explicit blocks, and geo policy.
+
 ```
 Known Bot ASNs:
   15169  — Google (Googlebot, GSC, Analytics)

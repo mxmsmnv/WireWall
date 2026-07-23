@@ -8,7 +8,7 @@
 
 If this project helps your work, consider supporting future development: [GitHub Sponsors](https://github.com/sponsors/mxmsmnv) or [smnv.org/sponsor](https://smnv.org/sponsor/).
 
-**Version:** 1.7.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
+**Version:** 1.7.1 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
 
 Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection, rate limiting, VPN/Proxy/Tor detection, JS challenge, and a real-time admin dashboard.
 
@@ -42,6 +42,7 @@ Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection,
 - **Scanner trigger preset** — optional immediate bans for obvious `.env`, `.git`, `wp-config`, backup, and phpinfo probes
 - **Bare block responses** — minimal 404/410 responses that cannot execute site analytics
 - **Scoped exceptions** — known bots and browser compatibility rules no longer bypass unrelated protections
+- **Verified search crawlers** — configured Googlebot/Bingbot identities use cached forward-confirmed reverse DNS before network heuristics are relaxed
 - **IP whitelist / blacklist** — exact, wildcard, and CIDR support
 - **IP spoofing protection** — proxy headers (CF-Connecting-IP, Incap, Sucuri) only trusted when REMOTE_ADDR belongs to the CDN's published IP ranges
 
@@ -122,11 +123,11 @@ IP Control → Whitelist: only explicitly trusted office/home/service IPs
 | 0.5 | Trusted ProcessWire AJAX |
 | 0.7 | Logged-in users — always allowed |
 | 1 | IP whitelist |
-| 1.5 | Classify scoped known-bot / compatibility exceptions |
 | 2 | Active temporary ban |
 | 2.5 | URL / User-Agent trigger rules |
 | 3 | Rate limiting (fixed 60-second window) |
 | 4 | IP blacklist |
+| 4.5 | Verify and classify scoped known-bot / compatibility exceptions |
 | 5 | JS challenge (except scoped compatibility clients) |
 | 6 | VPN / Proxy / Tor |
 | 7 | Datacenter |
