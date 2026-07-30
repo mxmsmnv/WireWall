@@ -122,6 +122,18 @@ $trafficStats = $inspector->getTrafficHistoryStats();
 exportAssertSame(2, $trafficStats['files'], 'Cache inspector should count traffic history JSONL files');
 exportAssertSame('traffic-' . $today . '.jsonl', $trafficStats['latest'], 'Cache inspector should report latest traffic history file');
 
+$older = date('Y-m-d', strtotime('-2 days'));
+$compressedPath = $tempDir . 'traffic-' . $older . '.jsonl.gz';
+$compressed = gzopen($compressedPath, 'wb6');
+gzwrite($compressed, json_encode($rows[0], JSON_UNESCAPED_SLASHES) . "\n");
+gzclose($compressed);
+$compressedFiles = $dashboard->files();
+exportAssertSame(3, count($compressedFiles), 'Dashboard should list gzip-rotated traffic reports.');
+$compressedRow = array_values(array_filter($compressedFiles, static fn(array $file): bool => $file['date'] === $older))[0] ?? [];
+exportAssertSame(1, $compressedRow['rows'] ?? 0, 'Dashboard should count rows in gzip-rotated reports.');
+$compressedSummary = $dashboard->summary([$compressedPath]);
+exportAssertSame(1, $compressedSummary['total'], 'Incident summaries should read gzip-rotated reports.');
+
 $logPath = $tempDir . 'wirewall.txt';
 $logLine = date('Y-m-d H:i:s') . "\tguest\t/\tBLOCKED | US (Ashburn, Virginia) | 203.0.113.10 | AS64500 Example | UA: TestBot | datacenter\n";
 file_put_contents($logPath, "ignored\n" . $logLine . date('Y-m-d H:i:s') . "\tguest\t/\tALLOWED | CA | 198.51.100.20 | UA: Browser | allowed\n");
@@ -145,6 +157,7 @@ foreach (glob($cacheDir . '*') ?: [] as $file) {
 @unlink($logPath);
 @unlink($todayPath);
 @unlink($yesterdayPath);
+@unlink($compressedPath);
 @rmdir($tempDir);
 
 echo "ProcessWireWall export tests passed\n";

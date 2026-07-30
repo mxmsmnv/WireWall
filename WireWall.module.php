@@ -1,7 +1,9 @@
 <?php namespace ProcessWire;
 
+require_once __DIR__ . '/src/Storage/WireWallOperationsStore.php';
+
 /**
- * WireWall 1.11.0 - Advanced Traffic Firewall
+ * WireWall 1.12.0 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -13,7 +15,7 @@
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.11.0
+ * @version 1.12.0
  * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @date April 24, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
@@ -25,7 +27,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 1110,
+            'version' => 1120,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -62,6 +64,10 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     protected $geoipCityReader = null;
     protected $settingsTableReady = null;
     protected $legacyTableSettings = [];
+    protected $operationsStore = null;
+    protected $ipIntelligenceService = null;
+    protected $currentIpIntel = null;
+    protected $currentDecisionTrace = [];
 
     /**
      * Get WireWall data directory path (persistent across updates)
@@ -92,6 +98,20 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      */
     protected function getPrivateDataPath() {
         return $this->getTrafficHistoryStore()->getPrivateDataPath();
+    }
+
+    public function getOperationsStore() {
+        if ($this->operationsStore instanceof WireWallOperationsStore) return $this->operationsStore;
+        require_once __DIR__ . '/src/Storage/WireWallOperationsStore.php';
+        return $this->operationsStore = new WireWallOperationsStore($this->getPrivateDataPath());
+    }
+
+    public function getIpIntelligenceService() {
+        if ($this->ipIntelligenceService instanceof WireWallIpIntelligenceService) return $this->ipIntelligenceService;
+        require_once __DIR__ . '/src/Intelligence/WireWallIpIntelligenceService.php';
+        $path = trim((string) ($this->ip2proxy_database_path ?? ''));
+        if ($path === '') $path = $this->getGeoIPPath() . 'IP2PROXY-LITE.BIN';
+        return $this->ipIntelligenceService = new WireWallIpIntelligenceService($path, $this->getComposerAutoloadPath());
     }
 
     /**
@@ -302,7 +322,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
 
         return [
             'schema' => 'wirewall_settings_export_v1',
-            'module_version' => '1.11.0',
+            'module_version' => '1.12.0',
             'module_version_number' => self::getModuleInfo()['version'],
             'exported_at' => date('c'),
             'settings' => $settings,
@@ -333,6 +353,211 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             }
         }
         return $settings;
+    }
+
+    public function addEmergencyRule(string $type, string $value, int $ttlSeconds, string $reason = ''): array {
+        $user = $this->wire('user');
+        return $this->getOperationsStore()->addEmergencyRule($type, $value, $ttlSeconds, [
+            'user' => $user && $user->id ? (string) $user->name : 'system',
+            'reason' => $reason,
+        ]);
+    }
+
+    public function removeEmergencyRule(string $id): bool {
+        $user = $this->wire('user');
+        return $this->getOperationsStore()->removeEmergencyRule($id, $user && $user->id ? (string) $user->name : 'system');
+    }
+
+    public function getEmergencyRules(): array {
+        return $this->getOperationsStore()->getEmergencyRules();
+    }
+
+    public function getConfigSnapshots(): array {
+        return $this->getOperationsStore()->getSnapshots();
+    }
+
+    public function restoreConfigSnapshot(string $id): bool {
+        $snapshot = $this->getOperationsStore()->getSnapshot($id);
+        if (!$snapshot || !is_array($snapshot['previous'] ?? null)) return false;
+        $current = $this->getWireWallSettings();
+        $settings = $snapshot['previous'];
+        $user = $this->wire('user');
+        $this->getOperationsStore()->saveSnapshot($current, $settings, [
+            'user' => $user && $user->id ? (string) $user->name : 'system',
+            'module_version' => '1.12.0',
+        ]);
+        $this->saveWireWallSettings($settings);
+        $this->wire('modules')->saveModuleConfigData($this, $settings);
+        $this->getOperationsStore()->audit('snapshot_restored', ['snapshot_id' => $id]);
+        return true;
+    }
+
+    public function getProtectionProfiles(): array {
+        return [
+            'normal' => [
+                'label' => 'Normal',
+                'settings' => ['block_action' => 'bare_404', 'rate_limit_enabled' => 1, 'rate_limit_requests' => 60, 'trigger_scanner_preset' => 'standard', 'proxy_risk_policy_enabled' => 1],
+            ],
+            'under_attack' => [
+                'label' => 'Under Attack',
+                'settings' => ['block_action' => 'bare_410', 'rate_limit_enabled' => 1, 'rate_limit_requests' => 20, 'rate_limit_minutes' => 360, 'trigger_scanner_preset' => 'standard', 'proxy_risk_policy_enabled' => 1, 'proxy_action_datacenter_proxy' => 'block', 'proxy_action_unknown_proxy' => 'block'],
+            ],
+            'seo_friendly' => [
+                'label' => 'SEO Friendly',
+                'settings' => ['block_action' => 'bare_404', 'block_search_bots' => 0, 'rate_limit_enabled' => 1, 'rate_limit_requests' => 120, 'proxy_risk_policy_enabled' => 1],
+            ],
+            'strict_geo' => [
+                'label' => 'Strict Geo',
+                'settings' => ['block_action' => 'bare_404', 'rate_limit_enabled' => 1, 'rate_limit_requests' => 30, 'city_blocking_enabled' => 1, 'subdivision_blocking_enabled' => 1],
+            ],
+            'maintenance_shield' => [
+                'label' => 'Maintenance Shield',
+                'settings' => ['block_action' => 'bare_404', 'rate_limit_enabled' => 1, 'rate_limit_requests' => 5, 'country_mode' => 'whitelist'],
+            ],
+        ];
+    }
+
+    public function previewProtectionProfile(string $profile): array {
+        $definition = $this->getProtectionProfiles()[$profile] ?? null;
+        if (!$definition) return [];
+        return WireWallOperationsStore::diff($this->getWireWallSettings(), array_merge($this->getWireWallSettings(), $definition['settings']));
+    }
+
+    public function applyProtectionProfile(string $profile): bool {
+        $definition = $this->getProtectionProfiles()[$profile] ?? null;
+        if (!$definition) return false;
+        $previous = $this->getWireWallSettings();
+        $next = array_merge($previous, $definition['settings'], ['active_protection_profile' => $profile]);
+        $user = $this->wire('user');
+        $this->getOperationsStore()->saveSnapshot($previous, $next, [
+            'user' => $user && $user->id ? (string) $user->name : 'system',
+            'module_version' => '1.12.0',
+        ]);
+        $this->saveWireWallSettings($next);
+        $this->wire('modules')->saveModuleConfigData($this, $next);
+        $this->getOperationsStore()->audit('profile_applied', ['profile' => $profile]);
+        return true;
+    }
+
+    public function getRuleExport(): array {
+        $settings = $this->getWireWallSettings();
+        $keys = [
+            'ip_whitelist', 'ip_blacklist', 'allowedIPs', 'allowedASNs', 'block_asns',
+            'blocked_countries', 'blocked_cities', 'blocked_subdivisions', 'country_rules',
+            'blocked_paths', 'blocked_user_agents', 'blocked_referers',
+            'allowedUserAgents', 'compatibilityUserAgents',
+            'trigger_url_patterns', 'trigger_user_agents',
+        ];
+        return array_intersect_key($settings, array_flip($keys));
+    }
+
+    public function importRules(array $rules, bool $apply = false): array {
+        $allowed = array_keys($this->getRuleExport());
+        $normalized = [];
+        foreach ($rules as $key => $value) {
+            if (in_array($key, $allowed, true) && (is_string($value) || is_array($value))) {
+                $normalized[$key] = is_array($value) ? implode("\n", array_map('strval', $value)) : trim($value);
+            }
+        }
+        $current = $this->getWireWallSettings();
+        $next = array_merge($current, $normalized);
+        $diff = WireWallOperationsStore::diff($current, $next);
+        if ($apply && $diff) {
+            $user = $this->wire('user');
+            $this->getOperationsStore()->saveSnapshot($current, $next, [
+                'user' => $user && $user->id ? (string) $user->name : 'system',
+                'module_version' => '1.12.0',
+            ]);
+            $this->saveWireWallSettings($next);
+            $this->wire('modules')->saveModuleConfigData($this, $next);
+        }
+        return ['rules' => $normalized, 'diff' => $diff, 'applied' => $apply && (bool) $diff];
+    }
+
+    public function generateRobotsPolicy(array $policy = []): string {
+        $bots = ['GPTBot', 'ChatGPT-User', 'OAI-SearchBot', 'Bytespider', 'PetalBot', 'ClaudeBot', 'Google-Extended', 'Amazonbot', 'Applebot', 'YandexBot', 'Bingbot'];
+        $settings = $this->getWireWallSettings();
+        $comparison = 'WireWall currently '
+            . (!empty($settings['block_ai_bots']) ? 'blocks AI crawler categories' : 'allows AI crawler categories')
+            . ' and '
+            . (!empty($settings['block_search_bots']) ? 'blocks search crawler categories.' : 'allows search crawler categories.');
+        $lines = ["# Advisory crawler policy generated by WireWall.", "# robots.txt is not a security boundary; keep firewall controls enabled.", '# ' . $comparison, ''];
+        foreach ($bots as $bot) {
+            $action = strtolower((string) ($policy[$bot] ?? (in_array($bot, ['GPTBot', 'Bytespider', 'ClaudeBot', 'Google-Extended'], true) ? 'disallow' : 'allow')));
+            $lines[] = 'User-agent: ' . $bot;
+            $lines[] = $action === 'disallow' ? 'Disallow: /' : 'Allow: /';
+            $lines[] = '';
+        }
+        return implode("\n", $lines);
+    }
+
+    public function simulateRequest(array $request): array {
+        $ip = trim((string) ($request['ip'] ?? ''));
+        if (filter_var($ip, FILTER_VALIDATE_IP) === false) throw new WireException('Enter a valid IP address.');
+        $ua = (string) ($request['user_agent'] ?? '');
+        $uri = (string) ($request['url'] ?? '/');
+        $path = parse_url($uri, PHP_URL_PATH) ?: '/';
+        $referer = (string) ($request['referer'] ?? '');
+        $geo = $this->getGeoData($ip);
+        $country = strtoupper(trim((string) ($request['country'] ?? ($geo['country'] ?? ''))));
+        $asn = trim((string) ($request['asn'] ?? ($geo['asn'] ?? '')));
+        $trace = [];
+        $decide = static fn(string $decision, string $reason, array $trace): array => ['decision' => $decision, 'reason' => $reason, 'trace' => $trace];
+        if ($this->isIPWhitelisted($ip)) return $decide('allowed', 'ip-whitelist', ['ip-whitelist: match']);
+        $trace[] = 'ip-whitelist: no';
+        $datacenter = $this->isDatacenter($ip, $asn);
+        $emergency = $this->getOperationsStore()->matchEmergencyRule($ip, $country, $asn, $datacenter);
+        if ($emergency) return $decide('blocked', 'emergency-' . $emergency['type'], array_merge($trace, ['emergency-rule: ' . $emergency['id']]));
+        $trace[] = 'emergency-rule: no';
+        if ($this->isIPBlacklisted($ip)) return $decide('blocked', 'ip', array_merge($trace, ['ip-blacklist: match']));
+        $trace[] = 'ip-blacklist: no';
+        foreach ($this->getScannerPresetPatterns($this->trigger_scanner_preset) as $pattern) {
+            if ($this->matchTriggerPattern($uri, $pattern)) return $decide('blocked', 'trigger-url-preset', array_merge($trace, ['trigger: ' . $pattern]));
+        }
+        $trace[] = 'trigger-rules: pass';
+        $intel = $this->getIpIntelligenceService()->lookup($ip, $asn);
+        $action = $this->getIpIntelligenceService()->actionFor($intel, $this->getWireWallSettings(), $path);
+        if ($action !== 'allow') return $decide($action === 'block' ? 'blocked' : 'challenged', 'proxy-class-' . ($intel['proxy_class'] ?? 'unknown'), array_merge($trace, ['ip-intel: ' . $action]));
+        $trace[] = 'ip-intel: allow';
+        if ($this->isBlockedASN($asn)) return $decide('blocked', 'asn-blocked', array_merge($trace, ['asn-blocked: match']));
+        $trace[] = 'asn-blocked: no';
+        $headerMap = [
+            'HTTP_USER_AGENT' => $ua,
+            'HTTP_ACCEPT' => (string) ($request['accept'] ?? ''),
+            'HTTP_ACCEPT_LANGUAGE' => (string) ($request['accept_language'] ?? ''),
+            'HTTP_SEC_FETCH_SITE' => (string) ($request['sec_fetch_site'] ?? ''),
+            'HTTP_SEC_FETCH_MODE' => (string) ($request['sec_fetch_mode'] ?? ''),
+        ];
+        $previousHeaders = [];
+        foreach ($headerMap as $key => $value) {
+            $previousHeaders[$key] = $_SERVER[$key] ?? null;
+            $_SERVER[$key] = $value;
+        }
+        try {
+            $globalBlocked = $this->checkGlobalRules($ip, $ua, $path, $referer, false, false);
+        } finally {
+            foreach ($previousHeaders as $key => $value) {
+                if ($value === null) unset($_SERVER[$key]);
+                else $_SERVER[$key] = $value;
+            }
+        }
+        if ($globalBlocked) return $decide('blocked', 'global', array_merge($trace, ['global-rules: block']));
+        $trace[] = 'global-rules: pass';
+        if ($country !== '' && $this->checkCountryBlocking($country)) return $decide('blocked', 'country', array_merge($trace, ['country: block']));
+        $trace[] = 'country: pass';
+        return $decide('allowed', '', array_merge($trace, ['final: allow']));
+    }
+
+    protected function shouldUseExternalIpIntel(string $path, ?string $proxyClass): bool {
+        $mode = strtolower((string) ($this->ip_intelligence_mode ?? 'local_only'));
+        if ($mode === 'local_only' || $mode === 'admin_manual_only') return false;
+        if ($mode === 'lazy_enrichment') return $proxyClass === null || $proxyClass === 'unknown_proxy';
+        if ($mode === 'strict_sensitive_routes') {
+            foreach ($this->parseRules((string) ($this->proxy_sensitive_paths ?? "/login\n/checkout\n/forms\n/api")) as $prefix) {
+                if ($prefix !== '' && str_starts_with(strtolower($path), strtolower($prefix))) return true;
+            }
+        }
+        return false;
     }
     
     /**
@@ -375,7 +600,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         if (!file_exists($filepath)) {
             return null;
         }
-        
+
         $content = @file_get_contents($filepath);
         if ($content === false) {
             return null;
@@ -395,6 +620,95 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return $data['value'];
     }
 
+    public function runTrafficMaintenance(bool $force = false): array {
+        $lastRun = (int) $this->cacheGet('traffic_maintenance_last_run');
+        if (!$force && $lastRun > strtotime('today')) return ['skipped' => true];
+        require_once __DIR__ . '/src/Storage/WireWallTrafficMaintenance.php';
+        $maintenance = new WireWallTrafficMaintenance($this->getTrafficHistoryPath());
+        $retention = max(1, min(3650, (int) ($this->traffic_retention_days ?? 30)));
+        $compressAfter = !empty($this->traffic_compress_enabled)
+            ? max(1, min($retention, (int) ($this->traffic_compress_after_days ?? 7)))
+            : 0;
+        $maxMb = max(0, min(1048576, (int) ($this->traffic_max_disk_mb ?? 0)));
+        $result = $maintenance->run($retention, $compressAfter, $maxMb);
+        $this->cacheSet('traffic_maintenance_last_run', time(), 172800);
+        if (($result['compressed'] ?? 0) || ($result['deleted'] ?? 0)) {
+            $this->getOperationsStore()->audit('traffic_maintenance', $result);
+        }
+        $alertThresholdMb = max(0, (int) ($this->traffic_disk_alert_mb ?? 0));
+        if (!empty($this->alerts_enabled) && $alertThresholdMb > 0 && ($result['bytes_after'] ?? 0) >= $alertThresholdMb * 1048576) {
+            $this->sendOperationalAlert('traffic_disk_threshold', [
+                'message' => 'WireWall traffic history disk usage exceeded the configured threshold.',
+                'bytes' => $result['bytes_after'],
+                'threshold_mb' => $alertThresholdMb,
+            ]);
+        }
+        return $result;
+    }
+
+    public function sendOperationalAlert(string $event, array $context = []): bool {
+        $hooked = $this->notificationEvent(['event' => $event, 'context' => $context, 'time' => date('c')]);
+        $payload = is_array($hooked) ? $hooked : ['event' => $event, 'context' => $context, 'time' => date('c')];
+        $cooldown = max(5, min(10080, (int) ($this->alert_cooldown_minutes ?? 60))) * 60;
+        if ($this->cacheGet('alert_' . preg_replace('/[^a-z0-9_-]/i', '_', $event))) return false;
+        $sent = false;
+        $email = trim((string) ($this->alert_email ?? ''));
+        if ($email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            try {
+                $mail = $this->wire('mail')->new();
+                $mail->to($email)->subject('WireWall alert: ' . $event)->body(json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+                $sent = (bool) $mail->send() || $sent;
+            } catch (\Throwable $e) {
+                $this->wire('log')->save('wirewall', 'Alert email failed: ' . $e->getMessage());
+            }
+        }
+        $webhook = trim((string) ($this->alert_webhook_url ?? ''));
+        if ($webhook !== '' && filter_var($webhook, FILTER_VALIDATE_URL)) {
+            try {
+                $http = new WireHttp();
+                $http->setTimeout(2);
+                $http->setHeader('Content-Type', 'application/json');
+                $sent = $http->post($webhook, json_encode($payload)) !== false || $sent;
+            } catch (\Throwable $e) {
+                $this->wire('log')->save('wirewall', 'Alert webhook failed: ' . $e->getMessage());
+            }
+        }
+        $this->cacheSet('alert_' . preg_replace('/[^a-z0-9_-]/i', '_', $event), true, $cooldown);
+        $this->getOperationsStore()->audit('notification', ['event' => $event, 'sent' => $sent, 'context' => $context]);
+        return $sent;
+    }
+
+    public function ___notificationEvent(array $payload): array {
+        return $payload;
+    }
+
+    protected function recordOperationalBlockEvent($ip, $country, $asn, string $reason): void {
+        if (empty($this->alerts_enabled)) return;
+        $window = $this->cacheGet('alert_block_window');
+        $now = time();
+        if (!is_array($window) || (int) ($window['started'] ?? 0) < $now - 300) {
+            $window = ['started' => $now, 'count' => 0, 'ips' => [], 'asns' => [], 'countries' => [], 'reasons' => []];
+        }
+        $window['count']++;
+        foreach (['ips' => (string) $ip, 'asns' => (string) $asn, 'countries' => (string) $country, 'reasons' => $reason] as $bucket => $value) {
+            if ($value !== '') $window[$bucket][$value] = ($window[$bucket][$value] ?? 0) + 1;
+            arsort($window[$bucket]);
+            $window[$bucket] = array_slice($window[$bucket], 0, 10, true);
+        }
+        $this->cacheSet('alert_block_window', $window, 600);
+        $threshold = max(10, (int) ($this->alert_block_spike_threshold ?? 200));
+        if ($window['count'] === $threshold) {
+            $this->sendOperationalAlert('blocked_request_spike', [
+                'window_seconds' => $now - $window['started'],
+                'blocked' => $window['count'],
+                'top_ips' => $window['ips'],
+                'top_asns' => $window['asns'],
+                'top_countries' => $window['countries'],
+                'top_reasons' => $window['reasons'],
+            ]);
+        }
+    }
+
     /**
      * Initialize module - early hook for maximum performance
      */
@@ -408,6 +722,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             $this->wire('modules')->saveModuleConfigData($this, $migratedData);
             $data = $migratedData;
         }
+        $this->setArray($data);
         
         // Normalize checkbox values: convert empty strings to 0, keep 1 as is
         // This supports old configs with "" and new configs with 0/1
@@ -417,7 +732,9 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             'block_datacenters', 'js_challenge_enabled', 'rate_limit_enabled',
             'block_bad_bots', 'block_search_bots', 'block_ai_bots', 
             'block_other_bots', 'enable_stats_logging', 'enable_traffic_history',
-            'disable_ajax_protection'
+            'disable_ajax_protection', 'proxy_risk_policy_enabled',
+            'decision_trace_enabled', 'traffic_compress_enabled',
+            'alerts_enabled'
         ];
         
         foreach ($checkboxFields as $field) {
@@ -447,6 +764,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         }
 
         $this->migrateTrafficHistoryToPrivateStorage();
+        $this->runTrafficMaintenance();
         
         // Create cache directory if it doesn't exist
         $cachePath = $this->wire('config')->paths->cache . 'WireWall/';
@@ -528,7 +846,9 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             'block_datacenters', 'js_challenge_enabled', 'rate_limit_enabled',
             'block_bad_bots', 'block_search_bots', 'block_ai_bots', 
             'block_other_bots', 'enable_stats_logging', 'enable_traffic_history',
-            'disable_ajax_protection'
+            'disable_ajax_protection', 'proxy_risk_policy_enabled',
+            'decision_trace_enabled', 'traffic_compress_enabled',
+            'alerts_enabled'
         ];
         
         foreach ($checkboxFields as $field) {
@@ -541,6 +861,13 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         // Add version number to config
         $moduleInfo = self::getModuleInfo();
         $data['version'] = $moduleInfo['version'];
+
+        $previous = $this->getWireWallSettings();
+        $user = $this->wire('user');
+        $this->getOperationsStore()->saveSnapshot($previous, $data, [
+            'user' => $user && $user->id ? (string) $user->name : 'system',
+            'module_version' => '1.12.0',
+        ]);
 
         // The dedicated table is canonical; ProcessWire's config row remains a
         // synchronized fallback for safe rollback and failed DB migrations.
@@ -656,6 +983,8 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
         $path = $page ? $page->url : parse_url($requestUri, PHP_URL_PATH);
         $referer = $_SERVER['HTTP_REFERER'] ?? '';
+        $this->currentDecisionTrace = [];
+        $this->currentIpIntel = null;
         
         // === PRIORITY 0.7: NEVER BLOCK LOGGED-IN PROCESSWIRE USERS ===
         // This check requires $ip to be resolved first (for accurate logging if enabled)
@@ -665,10 +994,12 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         
         // === PRIORITY 1: IP WHITELIST (ALWAYS ALLOW) ===
         if ($this->isIPWhitelisted($ip)) {
+            $this->currentDecisionTrace[] = 'ip-whitelist: match';
             $this->recordTrafficHistory($ip, null, null, true, 'ip-whitelist', $userAgent);
             $this->logAccess($ip, null, null, true, '', $userAgent);
             return;
         }
+        $this->currentDecisionTrace[] = 'ip-whitelist: no';
         
         // Get GeoIP data early (country + ASN) for whitelist checks
         $geoData = $this->getGeoData($ip);
@@ -676,31 +1007,47 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $asn = $geoData['asn'] ?? null;
         $this->currentAS = $asn;
         $this->currentCountry = $country;
+        $datacenter = $this->isDatacenter($ip, $asn);
+        $emergencyRule = $this->getOperationsStore()->matchEmergencyRule($ip, $country, $asn, $datacenter);
+        if ($emergencyRule) {
+            $this->currentDecisionTrace[] = 'emergency-rule: ' . $emergencyRule['id'];
+            $this->blockAccess('emergency-' . $emergencyRule['type'], $ip, $country, $asn, $userAgent);
+            return;
+        }
+        $this->currentDecisionTrace[] = 'emergency-rule: no';
         
         // === PRIORITY 2: ACTIVE TEMPORARY BAN ===
         if ($this->isIPBanned($ip)) {
+            $this->currentDecisionTrace[] = 'temporary-ban: match';
             $this->blockAccess('temporary-ban', $ip, $country, $asn, $userAgent);
             return;
         }
+        $this->currentDecisionTrace[] = 'temporary-ban: no';
 
         // === PRIORITY 2.5: URL / USER-AGENT TRIGGER RULES ===
         $triggerReason = $this->checkTriggerRules($ip, $userAgent, $requestUri);
         if ($triggerReason) {
+            $this->currentDecisionTrace[] = 'trigger-rules: ' . $triggerReason;
             $this->blockAccess($triggerReason, $ip, $country, $asn, $userAgent);
             return;
         }
+        $this->currentDecisionTrace[] = 'trigger-rules: pass';
 
         // === PRIORITY 3: RATE LIMITING ===
         if ($this->rate_limit_enabled && $this->isRateLimited($ip)) {
+            $this->currentDecisionTrace[] = 'rate-limit: block';
             $this->blockAccess('rate-limit', $ip, $country, $asn, $userAgent);
             return;
         }
+        $this->currentDecisionTrace[] = $this->rate_limit_enabled ? 'rate-limit: pass' : 'rate-limit: disabled';
         
         // === PRIORITY 4: IP BLACKLIST (ALWAYS BLOCK) ===
         if ($this->isIPBlacklisted($ip)) {
+            $this->currentDecisionTrace[] = 'ip-blacklist: match';
             $this->blockAccess('ip', $ip, null, null, $userAgent);
             return;
         }
+        $this->currentDecisionTrace[] = 'ip-blacklist: no';
 
         // Resolve scoped exceptions only after cheap abuse checks. This avoids
         // DNS work for already banned, triggered, rate-limited, or blacklisted
@@ -710,45 +1057,82 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $knownBotException = $this->isAllowedBot($userAgent, $ip, $asn, $verifiedKnownBot);
         $verifiedKnownBotException = $knownBotException && $verifiedKnownBot;
         $compatibilityException = $this->matchesCompatibilityUserAgent($userAgent);
+        $this->currentDecisionTrace[] = $verifiedKnownBotException
+            ? 'known-bot: verified'
+            : ($knownBotException ? 'known-bot: scoped-exception' : 'known-bot: no');
+        if ($compatibilityException) $this->currentDecisionTrace[] = 'compatibility-exception: match';
         
         // === PRIORITY 5: JS CHALLENGE CHECK ===
         if ($this->js_challenge_enabled && !$knownBotException && !$compatibilityException) {
             // Check if suspicious AND no valid cookie
             if ($this->isSuspiciousRequest($userAgent) && !$this->verifyChallengeCookie()) {
+                $this->currentDecisionTrace[] = 'js-challenge: required';
+                $this->showJSChallenge($ip, $userAgent);
+                return;
+            }
+        }
+        $this->currentDecisionTrace[] = 'js-challenge: pass';
+
+        // === PRIORITY 6: LOCAL-FIRST PROXY/PRIVACY RISK POLICY ===
+        if (!$verifiedKnownBotException && (($this->proxy_risk_policy_enabled ?? false) || $this->block_proxy_vpn_tor)) {
+            $this->currentIpIntel = $this->getIpIntelligenceService()->lookup($ip, $asn);
+            $proxyClass = (string) ($this->currentIpIntel['proxy_class'] ?? '');
+            $useExternal = ($this->block_proxy_vpn_tor && $proxyClass === '')
+                || $this->shouldUseExternalIpIntel((string) $path, $proxyClass ?: null);
+            if ($useExternal && $this->isProxyVPNTor($ip)) {
+                $proxyClass = $proxyClass ?: 'unknown_proxy';
+                $this->currentIpIntel['proxy_class'] = $proxyClass;
+                $this->currentIpIntel['privacy_provider'] = 'http_enrichment';
+                $this->currentIpIntel['source'] = 'optional_external';
+            }
+            $proxyAction = $this->getIpIntelligenceService()->actionFor(
+                $this->currentIpIntel,
+                $this->getWireWallSettings(),
+                (string) $path
+            );
+            if ($this->block_proxy_vpn_tor && $proxyClass !== '') $proxyAction = 'block';
+            $this->currentDecisionTrace[] = 'ip-intel: ' . ($proxyClass ?: 'none') . ' / ' . $proxyAction;
+            if ($proxyAction === 'block') {
+                $this->blockAccess('proxy-class-' . ($proxyClass ?: 'unknown'), $ip, $country, $asn, $userAgent);
+                return;
+            }
+            if ($proxyAction === 'challenge') {
                 $this->showJSChallenge($ip, $userAgent);
                 return;
             }
         }
         
-        // === PRIORITY 6: VPN/PROXY/TOR DETECTION ===
-        if (!$verifiedKnownBotException && $this->block_proxy_vpn_tor && $this->isProxyVPNTor($ip)) {
-            $this->blockAccess('proxy-vpn-tor', $ip, $country, $asn, $userAgent);
-            return;
-        }
-        
         // === PRIORITY 7: DATACENTER DETECTION ===
         if (!$verifiedKnownBotException && $this->block_datacenters && $this->isDatacenter($ip, $asn)) {
+            $this->currentDecisionTrace[] = 'datacenter: block';
             $this->blockAccess('datacenter', $ip, $country, $asn, $userAgent);
             return;
         }
+        $this->currentDecisionTrace[] = 'datacenter: pass';
         
         // === PRIORITY 8: ASN BLOCKING ===
         if (!$verifiedKnownBotException && $asn && $this->isBlockedASN($asn)) {
+            $this->currentDecisionTrace[] = 'asn: block';
             $this->blockAccess('asn-blocked', $ip, $country, $asn, $userAgent);
             return;
         }
+        $this->currentDecisionTrace[] = 'asn: pass';
         
         // === PRIORITY 9: GLOBAL RULES (bots, paths, UA, referer) ===
         if ($this->checkGlobalRules($ip, $userAgent, $path, $referer, $knownBotException, $compatibilityException)) {
+            $this->currentDecisionTrace[] = 'global-rules: block';
             $this->blockAccess('global', $ip, $country, $asn, $userAgent);
             return;
         }
+        $this->currentDecisionTrace[] = 'global-rules: pass';
         
         // === PRIORITY 10: COUNTRY BLOCKING (blacklist/whitelist) ===
         if ($country && $this->checkCountryBlocking($country)) {
+            $this->currentDecisionTrace[] = 'country: block';
             $this->blockAccess('country', $ip, $country, $asn, $userAgent);
             return;
         }
+        $this->currentDecisionTrace[] = 'country: pass';
         
         // === PRIORITY 10.5: CITY BLOCKING (blacklist/whitelist) ===
         if ($this->city_blocking_enabled && $this->geoipCityReader) {
@@ -778,6 +1162,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $allowedReason = $verifiedKnownBotException
             ? 'verified-known-bot'
             : ($knownBotException ? 'known-bot' : ($compatibilityException ? 'compatibility-exception' : ''));
+        $this->currentDecisionTrace[] = 'final: allow';
         $this->recordTrafficHistory($ip, $country, $asn, true, $allowedReason, $userAgent);
         if ($this->enable_stats_logging) {
             $this->logAccess($ip, $country, $asn, true, $allowedReason, $userAgent);
@@ -1294,7 +1679,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         }
         
         $http = new WireHttp();
-        $http->setTimeout(2);
+        $http->setTimeout(max(0.3, min(0.8, (float) ($this->ip_intelligence_timeout_ms ?? 500) / 1000)));
         $isProxy = false;
         
         // API 1: ip-api.com (free, no key needed)
@@ -2580,6 +2965,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
      */
     protected function blockAccess($reason, $ip, $country, $asn, $userAgent = '') {
         $this->recordTrafficHistory($ip, $country, $asn, false, $reason, $userAgent);
+        $this->recordOperationalBlockEvent($ip, $country, $asn, (string) $reason);
         if ($this->enable_stats_logging) {
             $this->logAccess($ip, $country, $asn, false, $reason, $userAgent);
         }
@@ -2910,6 +3296,8 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             'status' => $allowed ? 'allowed' : 'blocked',
             'reason' => (string)$reason,
             'bot_verification' => $this->currentBotVerification,
+            'ip_intel' => $this->currentIpIntel,
+            'decision_trace' => !empty($this->decision_trace_enabled) ? $this->currentDecisionTrace : null,
             'ip' => (string)$ip,
             'country' => $country ?: null,
             'city' => $cityData['city'] ?? null,
@@ -3207,7 +3595,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f = $modules->get('InputfieldCheckbox');
         $f->name = 'block_proxy_vpn_tor';
         $f->label = 'Block VPN / Proxy / Tor';
-        $f->description = 'Detect and block VPN, proxy servers, and Tor exit nodes via ip-api.com → ipinfo.io → ipapi.co';
+        $f->description = 'Legacy all-in-one switch. Prefer the local-first per-class policy below for lower false-positive risk.';
         $f->checked = isset($data['block_proxy_vpn_tor']) && $data['block_proxy_vpn_tor'] ? 'checked' : '';
         $fieldset->add($f);
 
@@ -3216,6 +3604,81 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f->label = 'Block Datacenters';
         $f->description = 'Block traffic from AWS, Google Cloud, DigitalOcean, OVH, Hetzner, Akamai, Cloudflare, etc.';
         $f->checked = isset($data['block_datacenters']) && $data['block_datacenters'] ? 'checked' : '';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->name = 'proxy_risk_policy_enabled';
+        $f->label = 'Enable per-class proxy/privacy policy';
+        $f->description = 'Classify locally with ASN rules and optional IP2Proxy LITE. External API calls are not required on the request path.';
+        $f->checked = !empty($data['proxy_risk_policy_enabled']) ? 'checked' : '';
+        $fieldset->add($f);
+
+        foreach ([
+            'privacy_relay' => ['iCloud / privacy relay', 'allow'],
+            'consumer_vpn' => ['Consumer VPN', 'allow'],
+            'datacenter_proxy' => ['Datacenter proxy', 'block'],
+            'tor' => ['Tor', 'block'],
+            'unknown_proxy' => ['Unknown/public proxy', 'challenge'],
+            'residential_proxy' => ['Residential proxy suspected', 'allow'],
+        ] as $class => [$label, $default]) {
+            $f = $modules->get('InputfieldSelect');
+            $f->name = 'proxy_action_' . $class;
+            $f->label = $label . ' action';
+            $f->addOptions(['allow' => 'Allow with normal controls', 'challenge' => 'JavaScript challenge', 'block' => 'Block']);
+            $f->value = $data['proxy_action_' . $class] ?? $default;
+            $f->showIf = 'proxy_risk_policy_enabled=1';
+            $f->columnWidth = 50;
+            $fieldset->add($f);
+        }
+
+        $f = $modules->get('InputfieldTextarea');
+        $f->name = 'proxy_sensitive_paths';
+        $f->label = 'Sensitive route prefixes';
+        $f->description = 'One path prefix per line. The sensitive-route action can tighten otherwise allowed privacy classes.';
+        $f->value = $data['proxy_sensitive_paths'] ?? "/login\n/checkout\n/forms\n/api";
+        $f->rows = 4;
+        $f->showIf = 'proxy_risk_policy_enabled=1';
+        $f->columnWidth = 50;
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldSelect');
+        $f->name = 'proxy_sensitive_action';
+        $f->label = 'Minimum action on sensitive routes';
+        $f->addOptions(['allow' => 'Keep class action', 'challenge' => 'At least challenge', 'block' => 'Always block classified proxy traffic']);
+        $f->value = $data['proxy_sensitive_action'] ?? 'challenge';
+        $f->showIf = 'proxy_risk_policy_enabled=1';
+        $f->columnWidth = 50;
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldText');
+        $f->name = 'ip2proxy_database_path';
+        $f->label = 'IP2Proxy LITE BIN path';
+        $f->description = 'Optional local BIN database. Requires the IP2Proxy PHP SDK in WireWall’s persistent vendor directory. Missing or invalid data fails open to MaxMind/ASN rules.';
+        $f->value = $data['ip2proxy_database_path'] ?? '';
+        $f->placeholder = wire('config')->paths->assets . 'WireWall/geoip/IP2PROXY-LITE.BIN';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldSelect');
+        $f->name = 'ip_intelligence_mode';
+        $f->label = 'IP intelligence mode';
+        $f->description = 'Local-only is fastest. Optional HTTP enrichment is cached and only runs for ambiguous or sensitive requests.';
+        $f->addOptions([
+            'local_only' => 'Local only (recommended)',
+            'lazy_enrichment' => 'Lazy enrichment for ambiguous classifications',
+            'strict_sensitive_routes' => 'External enrichment only on sensitive routes',
+            'admin_manual_only' => 'External providers only when requested by an admin',
+        ]);
+        $f->value = $data['ip_intelligence_mode'] ?? 'local_only';
+        $f->columnWidth = 70;
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldInteger');
+        $f->name = 'ip_intelligence_timeout_ms';
+        $f->label = 'External timeout (ms)';
+        $f->value = $data['ip_intelligence_timeout_ms'] ?? 500;
+        $f->min = 300;
+        $f->max = 800;
+        $f->columnWidth = 30;
         $fieldset->add($f);
 
         $f = $modules->get('InputfieldTextarea');
@@ -3769,7 +4232,106 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $inputfields->add($fieldset);
 
         // =====================================================================
-        // 11. EXPORT
+        // 11. OPERATIONS
+        // =====================================================================
+        $fieldset = $modules->get('InputfieldFieldset');
+        $fieldset->label = 'Operations, Retention & Alerts';
+        $fieldset->collapsed = Inputfield::collapsedYes;
+        $fieldset->icon = 'history';
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->name = 'decision_trace_enabled';
+        $f->label = 'Store decision traces';
+        $f->description = 'Adds compact rule traces to traffic JSONL. Disabled by default to minimize log size.';
+        $f->checked = !empty($data['decision_trace_enabled']) ? 'checked' : '';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldInteger');
+        $f->name = 'traffic_retention_days';
+        $f->label = 'Traffic retention (days)';
+        $f->value = $data['traffic_retention_days'] ?? 30;
+        $f->min = 1;
+        $f->max = 3650;
+        $f->columnWidth = 33;
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->name = 'traffic_compress_enabled';
+        $f->label = 'Compress old traffic logs';
+        $f->checked = !empty($data['traffic_compress_enabled']) ? 'checked' : '';
+        $f->columnWidth = 33;
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldInteger');
+        $f->name = 'traffic_compress_after_days';
+        $f->label = 'Compress after (days)';
+        $f->value = $data['traffic_compress_after_days'] ?? 7;
+        $f->min = 1;
+        $f->showIf = 'traffic_compress_enabled=1';
+        $f->columnWidth = 34;
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldInteger');
+        $f->name = 'traffic_max_disk_mb';
+        $f->label = 'Maximum traffic disk usage (MB)';
+        $f->description = '0 disables the size cap. Oldest files are removed first.';
+        $f->value = $data['traffic_max_disk_mb'] ?? 0;
+        $f->min = 0;
+        $f->columnWidth = 50;
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldInteger');
+        $f->name = 'traffic_disk_alert_mb';
+        $f->label = 'Disk alert threshold (MB)';
+        $f->value = $data['traffic_disk_alert_mb'] ?? 0;
+        $f->min = 0;
+        $f->columnWidth = 50;
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->name = 'alerts_enabled';
+        $f->label = 'Enable operational alerts';
+        $f->description = 'Notification payloads also pass through the hookable notificationEvent() method.';
+        $f->checked = !empty($data['alerts_enabled']) ? 'checked' : '';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldEmail');
+        $f->name = 'alert_email';
+        $f->label = 'Alert email';
+        $f->value = $data['alert_email'] ?? '';
+        $f->showIf = 'alerts_enabled=1';
+        $f->columnWidth = 40;
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldURL');
+        $f->name = 'alert_webhook_url';
+        $f->label = 'Alert webhook URL';
+        $f->value = $data['alert_webhook_url'] ?? '';
+        $f->showIf = 'alerts_enabled=1';
+        $f->columnWidth = 40;
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldInteger');
+        $f->name = 'alert_cooldown_minutes';
+        $f->label = 'Alert cooldown';
+        $f->value = $data['alert_cooldown_minutes'] ?? 60;
+        $f->min = 5;
+        $f->showIf = 'alerts_enabled=1';
+        $f->columnWidth = 20;
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldInteger');
+        $f->name = 'alert_block_spike_threshold';
+        $f->label = 'Blocked-request spike threshold';
+        $f->description = 'Send one rate-limited alert when this many blocks occur within five minutes.';
+        $f->value = $data['alert_block_spike_threshold'] ?? 200;
+        $f->min = 10;
+        $f->showIf = 'alerts_enabled=1';
+        $fieldset->add($f);
+        $inputfields->add($fieldset);
+
+        // =====================================================================
+        // 12. EXPORT
         // =====================================================================
         $fieldset = $modules->get('InputfieldFieldset');
         $fieldset->label = 'Export & Diagnostics';

@@ -88,7 +88,7 @@ class WireWallDashboardStats {
 
     public function buildStats(array $lines): array {
         $total = $blocked = $allowed = 0;
-        $reasons = $countries = $ips = [];
+        $reasons = $countries = $ips = $asns = [];
         $byHour = array_fill(0, 24, 0);
         $recent = [];
         $cutoff24 = time() - 86400;
@@ -108,6 +108,9 @@ class WireWallDashboardStats {
                 if ($row['ip']) {
                     $ips[$row['ip']] = ($ips[$row['ip']] ?? 0) + 1;
                 }
+                if ($row['asn']) {
+                    $asns[$row['asn']] = ($asns[$row['asn']] ?? 0) + 1;
+                }
                 if ($row['time'] >= $cutoff24) {
                     $byHour[(int)date('G', $row['time'])]++;
                 }
@@ -121,6 +124,7 @@ class WireWallDashboardStats {
         arsort($reasons);
         arsort($countries);
         arsort($ips);
+        arsort($asns);
 
         return [
             'total' => $total,
@@ -131,6 +135,7 @@ class WireWallDashboardStats {
             'reasons' => array_slice($reasons, 0, 10, true),
             'countries' => array_slice($countries, 0, 10, true),
             'topIPs' => array_slice($ips, 0, 10, true),
+            'asns' => array_slice($asns, 0, 10, true),
             'byHour' => $byHour,
             'recent' => array_reverse(array_slice($recent, -50)),
         ];

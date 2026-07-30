@@ -6,6 +6,26 @@ Ready-to-use configurations for common security scenarios.
 
 ## Basic Configurations
 
+### Recommended privacy/proxy baseline
+
+```text
+Per-class proxy/privacy policy: enabled
+IP intelligence mode: local_only
+iCloud / privacy relay: allow
+Consumer VPN: allow
+Residential proxy suspected: allow
+Unknown proxy: challenge
+Datacenter proxy: block
+Tor: block
+Sensitive paths: /login, /checkout, /forms, /api
+Sensitive minimum action: challenge
+```
+
+This keeps ordinary privacy-focused users behind normal rate, trigger, and
+abuse controls without treating them as trusted bypasses. During an incident,
+use dashboard TTL rules or the **Under Attack** profile, preview its diff, and
+restore the automatically created snapshot afterward.
+
 ### 1. Blog / News Site
 
 **Goal:** Protect from comment spam and DDoS

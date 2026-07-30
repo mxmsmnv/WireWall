@@ -9,10 +9,11 @@
 - PHP 8.1 or higher
 - Write permissions on `/site/modules/` and `/site/assets/cache/`
 
-**Optional (for MaxMind)**
+**Optional (for local IP intelligence)**
 - Composer
 - Free MaxMind account
 - ~82 MB disk space for all three databases
+- IP2Proxy LITE BIN database and the IP2Proxy PHP SDK
 
 ---
 
@@ -111,6 +112,29 @@ Go to **Modules → WireWall → Configure** — the Geo Blocking section shows 
 
 ---
 
+## Step 5 — IP2Proxy LITE (optional)
+
+WireWall can classify additional proxy/privacy types from a local IP2Proxy LITE
+BIN without a per-request API call. Download a compatible LITE BIN from
+`lite.ip2location.com`, place it at:
+
+```text
+/site/assets/WireWall/geoip/IP2PROXY-LITE.BIN
+```
+
+Install the vendor SDK in the persistent WireWall data directory:
+
+```bash
+cd /path/to/site/assets/WireWall/
+composer require ip2location/ip2proxy-php
+```
+
+Then enable **per-class proxy/privacy policy**. Missing, unreadable, or limited
+LITE data fails open to MaxMind/ASN classification. LITE coverage is less
+complete than commercial IP2Proxy editions.
+
+---
+
 ## Directory structure after installation
 
 ```
@@ -126,7 +150,8 @@ Go to **Modules → WireWall → Configure** — the Geo Blocking section shows 
 ├── geoip/
 │   ├── GeoLite2-Country.mmdb
 │   ├── GeoLite2-ASN.mmdb
-│   └── GeoLite2-City.mmdb       optional
+│   ├── GeoLite2-City.mmdb       optional
+│   └── IP2PROXY-LITE.BIN        optional
 ├── vendor/                      Composer dependencies
 ├── composer.json
 └── composer.lock
@@ -137,6 +162,11 @@ Go to **Modules → WireWall → Configure** — the Geo Blocking section shows 
 ├── proxy_*.cache                VPN/Proxy detection results
 └── geo_*.cache                  GeoIP lookup results
 ```
+
+Private operational data (TTL rules, audit JSONL, and configuration snapshots)
+is stored under `SITE-DIRECTORY-wirewall-private/operations/`. Traffic retention
+and gzip rotation run at most once per day and can also be triggered from the
+dashboard.
 
 ---
 

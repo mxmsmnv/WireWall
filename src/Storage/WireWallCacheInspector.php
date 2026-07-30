@@ -63,7 +63,7 @@ class WireWallCacheInspector {
         if (!is_dir($this->trafficDir)) return $stats;
 
         foreach (scandir($this->trafficDir) ?: [] as $file) {
-            if (!preg_match('/^traffic-\d{4}-\d{2}-\d{2}\.jsonl$/', $file)) continue;
+            if (!preg_match('/^traffic-\d{4}-\d{2}-\d{2}\.jsonl(?:\.gz)?$/', $file)) continue;
             $path = $this->trafficDir . $file;
             if (!is_file($path)) continue;
             $stats['files']++;

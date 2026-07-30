@@ -19,6 +19,7 @@ class WireWallTrafficReportService {
         }
 
         $path = $this->trafficDir . 'traffic-' . $date . '.jsonl';
+        if (!is_file($path) && is_file($path . '.gz')) $path .= '.gz';
         if (!is_file($path)) {
             throw new Wire404Exception('No traffic report exists for ' . $date . '.');
         }
@@ -32,12 +33,13 @@ class WireWallTrafficReportService {
 
     public function countJsonlRows(string $path): int {
         $rows = 0;
-        $handle = @fopen($path, 'rb');
+        $handle = str_ends_with($path, '.gz') ? @gzopen($path, 'rb') : @fopen($path, 'rb');
         if (!$handle) return 0;
-        while (fgets($handle) !== false) {
+        $reader = str_ends_with($path, '.gz') ? 'gzgets' : 'fgets';
+        while ($reader($handle) !== false) {
             $rows++;
         }
-        fclose($handle);
+        str_ends_with($path, '.gz') ? gzclose($handle) : fclose($handle);
         return $rows;
     }
 
@@ -57,7 +59,7 @@ class WireWallTrafficReportService {
         $nextIndex = [];
 
         foreach (scandir($this->trafficDir) ?: [] as $file) {
-            if (!preg_match('/^traffic-(\d{4}-\d{2}-\d{2})\.jsonl$/', $file, $match)) {
+            if (!preg_match('/^traffic-(\d{4}-\d{2}-\d{2})\.jsonl(?:\.gz)?$/', $file, $match)) {
                 continue;
             }
             $path = $this->trafficDir . $file;
@@ -122,6 +124,10 @@ class WireWallTrafficReportService {
         for ($date = $start; $date <= $end; $date = $date->modify('+1 day')) {
             $name = 'traffic-' . $date->format('Y-m-d') . '.jsonl';
             $path = $this->trafficDir . $name;
+            if (!is_file($path) && is_file($path . '.gz')) {
+                $path .= '.gz';
+                $name .= '.gz';
+            }
             if (is_file($path)) {
                 $zip->addFile($path, $name);
                 $added++;
@@ -151,16 +157,18 @@ class WireWallTrafficReportService {
         $cutoff = time() - 86400;
         foreach ([date('Y-m-d', strtotime('-1 day')), date('Y-m-d')] as $date) {
             $path = $this->trafficDir . 'traffic-' . $date . '.jsonl';
-            $input = @fopen($path, 'rb');
+            if (!is_file($path) && is_file($path . '.gz')) $path .= '.gz';
+            $compressed = str_ends_with($path, '.gz');
+            $input = $compressed ? @gzopen($path, 'rb') : @fopen($path, 'rb');
             if (!$input) continue;
-            while (($line = fgets($input)) !== false) {
+            while (($line = $compressed ? gzgets($input) : fgets($input)) !== false) {
                 $row = json_decode($line, true);
                 $timestamp = is_array($row) ? (int)($row['unix_time'] ?? 0) : 0;
                 if ($timestamp >= $cutoff) {
                     fwrite($output, $line);
                 }
             }
-            fclose($input);
+            $compressed ? gzclose($input) : fclose($input);
         }
         fclose($output);
         return $temp;
@@ -180,9 +188,10 @@ class WireWallTrafficReportService {
         ];
 
         foreach ($paths as $path) {
-            $handle = @fopen($path, 'rb');
+            $compressed = str_ends_with($path, '.gz');
+            $handle = $compressed ? @gzopen($path, 'rb') : @fopen($path, 'rb');
             if (!$handle) continue;
-            while (($line = fgets($handle)) !== false) {
+            while (($line = $compressed ? gzgets($handle) : fgets($handle)) !== false) {
                 $row = json_decode($line, true);
                 if (!is_array($row)) continue;
                 $summary['total']++;
@@ -196,7 +205,7 @@ class WireWallTrafficReportService {
                     $this->incrementSummary($summary['hourly'], date('Y-m-d H:00', $time));
                 }
             }
-            fclose($handle);
+            $compressed ? gzclose($handle) : fclose($handle);
         }
 
         foreach (['status', 'top_ips', 'top_asns', 'top_countries', 'top_reasons', 'hourly'] as $key) {

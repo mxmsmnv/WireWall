@@ -8,7 +8,7 @@
 
 If this project helps your work, consider supporting future development: [GitHub Sponsors](https://github.com/sponsors/mxmsmnv) or [smnv.org/sponsor](https://smnv.org/sponsor/).
 
-**Version:** 1.11.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
+**Version:** 1.12.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
 
 Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection, rate limiting, VPN/Proxy/Tor detection, JS challenge, and a real-time admin dashboard.
 
@@ -34,7 +34,9 @@ Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection,
 
 ### Security
 - **Rate limiting** — requests per minute per IP, configurable ban duration
-- **VPN / Proxy / Tor detection** — multi-API chain (ip-api.com → ipinfo.io → ipapi.co)
+- **Local-first IP intelligence** — MaxMind/ASN baseline, optional IP2Proxy LITE BIN, and optional cached HTTP enrichment
+- **Risk-class policies** — separate allow/challenge/block actions for privacy relay, consumer VPN, datacenter proxy, Tor, unknown proxy, and residential proxy signals
+- **Sensitive-route escalation** — tighten classified traffic on login, checkout, forms, and API paths
 - **Datacenter blocking** — AWS, Google Cloud, DigitalOcean, Azure, OVH, Hetzner, Akamai…
 - **ASN blocking** — block entire networks by autonomous system number
 - **JavaScript challenge** — transparent challenge for suspicious requests
@@ -54,6 +56,12 @@ Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection,
 - **Redacted settings export** — download active settings for AI-assisted review without exposing secret-like values
 - **Hourly chart** — blocked requests over last 24 hours (Chart.js)
 - **Top reasons, countries, IPs** — bar charts with counts
+- **Emergency actions** — reversible TTL blocks for IPs, ASNs, countries, and datacenter traffic
+- **Profiles and snapshots** — preview protection presets, audit changes, download/diff/restore snapshots, and import/export rules
+- **Rule simulator** — explain allow/block/challenge decisions without sending a real request
+- **False-positive and analytics guard** — review browser-like broad-rule blocks and warn about analytics-capable 404 responses
+- **Crawler policy helper** — generate advisory robots.txt rules while keeping firewall controls explicit
+- **Optional Squad analysis** — send redacted incident context to the installed Squad module and show review-only recommendations
 - **Active bans** — live list with TTL countdown
 - **Recent events** — last 50 log entries, sticky header, newest first
 - **Light / dark theme** — reads PW CSS variables, adapts automatically
@@ -65,6 +73,7 @@ Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection,
 - **Cache management UI** — per-type stats, clear buttons
 - **Dedicated settings storage** — canonical `wirewall_settings` table with automatic migration and ProcessWire config fallback
 - **Detailed logging** — country, city, region, ASN, UA in every log entry
+- **Retention and alerts** — gzip rotation, retention/disk caps, rate-limited email/webhook notifications, and hookable alert payloads
 
 ---
 
@@ -76,6 +85,8 @@ Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection,
 | PHP | 8.1 or higher |
 | MaxMind GeoLite2 | Optional but strongly recommended |
 | Composer | Optional (required for MaxMind) |
+| IP2Proxy LITE + SDK | Optional for local proxy/privacy classification |
+| Squad | Optional for in-dashboard AI recommendations |
 
 ---
 
@@ -109,7 +120,12 @@ Block Action: Bare 404 (recommended for bot/scanner protection)
 Rate Limiting: 10 req/min, 60 min ban
 ✅ Block Bad Bots
 ✅ Block AI Bots
-✅ Block VPN/Proxy/Tor
+✅ Enable per-class proxy/privacy policy
+Privacy Relay: Allow
+Consumer VPN: Allow
+Datacenter Proxy: Block
+Tor: Block
+IP Intelligence Mode: Local only
 
 Exceptions → Known Bot User-Agents: Googlebot, Chrome-Lighthouse, Bingbot, UptimeRobot, Pingdom, StatusCake, DatadogSynthetics, NewRelicSynthetics (default)
 Exceptions → Known Bot ASNs: 15169 (Google), 8075 (Microsoft)
@@ -127,13 +143,14 @@ IP Control → Whitelist: only explicitly trusted office/home/service IPs
 | 0.5 | Trusted ProcessWire AJAX |
 | 0.7 | Logged-in users — always allowed |
 | 1 | IP whitelist |
+| 1.5 | Emergency IP/ASN/country/datacenter TTL rule |
 | 2 | Active temporary ban |
 | 2.5 | URL / User-Agent trigger rules |
 | 3 | Rate limiting (fixed 60-second window) |
 | 4 | IP blacklist |
 | 4.5 | Verify and classify scoped known-bot / compatibility exceptions |
 | 5 | JS challenge (except scoped compatibility clients) |
-| 6 | VPN / Proxy / Tor |
+| 6 | Local-first proxy/privacy risk class policy |
 | 7 | Datacenter |
 | 8 | ASN blocking |
 | 9 | Global rules (known bots skip bot heuristics, not explicit rules) |
@@ -146,7 +163,7 @@ IP Control → Whitelist: only explicitly trusted office/home/service IPs
 
 ## MaxMind GeoLite2
 
-WireWall works without MaxMind via HTTP API fallback, but MaxMind is strongly recommended for production.
+WireWall works without MaxMind, but MaxMind is strongly recommended for production. Optional HTTP enrichment is disabled by default so public requests do not depend on third-party APIs.
 
 | | With MaxMind | Without MaxMind |
 |---|---|---|
@@ -178,8 +195,12 @@ composer require geoip2/geoip2
 │   ├── WireWallMonitorProviderVerifier.php
 │   ├── Storage/
 │   │   ├── WireWallCacheInspector.php
+│   │   ├── WireWallOperationsStore.php
+│   │   ├── WireWallTrafficMaintenance.php
 │   │   ├── WireWallTrafficHistoryStore.php
 │   │   └── WireWallTrafficReportService.php
+│   ├── Intelligence/
+│   │   └── WireWallIpIntelligenceService.php
 │   └── Support/
 │       ├── WireWallIpMatcher.php
 │       └── WireWallRuleMatcher.php
@@ -196,14 +217,16 @@ composer require geoip2/geoip2
 ├── geoip/
 │   ├── GeoLite2-Country.mmdb
 │   ├── GeoLite2-ASN.mmdb
-│   └── GeoLite2-City.mmdb       optional
+│   ├── GeoLite2-City.mmdb       optional
+│   └── IP2PROXY-LITE.BIN        optional
 ├── vendor/                      Composer dependencies
 ├── composer.json
 └── composer.lock
 
 ../SITE-DIRECTORY-wirewall-private/  Private data outside document root
 └── traffic/
-    └── traffic-YYYY-MM-DD.jsonl    AI-friendly request history
+    ├── traffic-YYYY-MM-DD.jsonl    AI-friendly request history
+    └── traffic-YYYY-MM-DD.jsonl.gz rotated history
 ```
 
 ## Traffic History

@@ -4,6 +4,35 @@ All notable changes to WireWall are documented here.
 
 ---
 
+## 1.12.0 — July 30, 2026
+
+### Incident Operations
+
+- Added permission- and CSRF-protected dashboard actions for temporary IP, ASN, country, and datacenter blocks with automatic TTL expiry and private audit logs.
+- Added protection profiles with previewable diffs, automatic pre-change snapshots, snapshot history/download/restore, and validated rule JSON import/export.
+- Added a no-traffic request simulator with decision traces for IP, UA, URL, referer, browser headers, country, and ASN overrides.
+- Added a false-positive review queue, analytics-leakage/configuration warnings, crawler `robots.txt` guidance, and quick offender actions.
+- Added optional Squad analysis using redacted settings, summarized traffic, and sampled false-positive candidates; recommendations are never auto-applied.
+
+### IP Intelligence
+
+- Added separate policy actions for privacy relay, consumer VPN, datacenter proxy, Tor, unknown proxy, and suspected residential proxy traffic.
+- Added sensitive-route policy escalation and traffic-history fields for proxy class, provider, source, and lookup latency.
+- Added optional local IP2Proxy LITE BIN support through the IP2Proxy PHP SDK with fail-open fallback to MaxMind/ASN rules.
+- Made external HTTP enrichment optional (`local_only` by default), cached, timeout-limited, and selectable for ambiguous or sensitive requests.
+
+### Lifecycle and Alerts
+
+- Added daily traffic retention, gzip rotation, disk caps, disk threshold alerts, blocked-request spike alerts, notification cooldowns, email/webhook delivery, and a hookable notification payload.
+- Added transparent support for downloading, summarizing, and packaging compressed traffic reports.
+
+### Tests
+
+- Added regression coverage for emergency rules, snapshots/diffs, risk-class defaults, sensitive-route escalation, and traffic retention.
+- Documented this minor release as ProcessWire numeric module version `1120`, continuing the `1.10.0` → `1100` and `1.11.0` → `1110` convention.
+
+---
+
 ## 1.11.0 — July 23, 2026
 
 ### New Features
