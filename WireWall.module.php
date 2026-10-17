@@ -3,7 +3,7 @@
 require_once __DIR__ . '/src/Storage/WireWallOperationsStore.php';
 
 /**
- * WireWall 1.13.0 - Advanced Traffic Firewall
+ * WireWall 1.12.0 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -15,7 +15,7 @@ require_once __DIR__ . '/src/Storage/WireWallOperationsStore.php';
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.13.0
+ * @version 1.12.0
  * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @date April 24, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
@@ -27,7 +27,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 1130,
+            'version' => 1120,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -1052,13 +1052,6 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         // Resolve scoped exceptions only after cheap abuse checks. This avoids
         // DNS work for already banned, triggered, rate-limited, or blacklisted
         // requests that merely spoof a crawler User-Agent.
-        require_once __DIR__ . '/src/Security/WireWallOwnerScannerVerifier.php';
-        $scannerGrant = $config->wireWallOwnerScanner ?? null;
-        $scannerException = is_array($scannerGrant) && (new WireWallOwnerScannerVerifier(
-            $this->getPrivateDataPath() . 'owner-scanner/'
-        ))->verify($_SERVER, $scannerGrant, time());
-        if ($scannerException) $this->currentDecisionTrace[] = 'owner-scanner: signed-readonly';
-
         $botVerification = $this->verifyKnownBotIdentity($userAgent, $ip);
         $verifiedKnownBot = ($botVerification['status'] ?? '') === 'verified';
         $knownBotException = $this->isAllowedBot($userAgent, $ip, $asn, $verifiedKnownBot);
@@ -1070,7 +1063,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         if ($compatibilityException) $this->currentDecisionTrace[] = 'compatibility-exception: match';
         
         // === PRIORITY 5: JS CHALLENGE CHECK ===
-        if ($this->js_challenge_enabled && !$knownBotException && !$compatibilityException && !$scannerException) {
+        if ($this->js_challenge_enabled && !$knownBotException && !$compatibilityException) {
             // Check if suspicious AND no valid cookie
             if ($this->isSuspiciousRequest($userAgent) && !$this->verifyChallengeCookie()) {
                 $this->currentDecisionTrace[] = 'js-challenge: required';
@@ -1081,7 +1074,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $this->currentDecisionTrace[] = 'js-challenge: pass';
 
         // === PRIORITY 6: LOCAL-FIRST PROXY/PRIVACY RISK POLICY ===
-        if (!$scannerException && !$verifiedKnownBotException && (($this->proxy_risk_policy_enabled ?? false) || $this->block_proxy_vpn_tor)) {
+        if (!$verifiedKnownBotException && (($this->proxy_risk_policy_enabled ?? false) || $this->block_proxy_vpn_tor)) {
             $this->currentIpIntel = $this->getIpIntelligenceService()->lookup($ip, $asn);
             $proxyClass = (string) ($this->currentIpIntel['proxy_class'] ?? '');
             $useExternal = ($this->block_proxy_vpn_tor && $proxyClass === '')
@@ -1110,7 +1103,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         }
         
         // === PRIORITY 7: DATACENTER DETECTION ===
-        if (!$scannerException && !$verifiedKnownBotException && $this->block_datacenters && $this->isDatacenter($ip, $asn)) {
+        if (!$verifiedKnownBotException && $this->block_datacenters && $this->isDatacenter($ip, $asn)) {
             $this->currentDecisionTrace[] = 'datacenter: block';
             $this->blockAccess('datacenter', $ip, $country, $asn, $userAgent);
             return;
@@ -1126,7 +1119,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $this->currentDecisionTrace[] = 'asn: pass';
         
         // === PRIORITY 9: GLOBAL RULES (bots, paths, UA, referer) ===
-        if ($this->checkGlobalRules($ip, $userAgent, $path, $referer, $knownBotException, $compatibilityException || $scannerException)) {
+        if ($this->checkGlobalRules($ip, $userAgent, $path, $referer, $knownBotException, $compatibilityException)) {
             $this->currentDecisionTrace[] = 'global-rules: block';
             $this->blockAccess('global', $ip, $country, $asn, $userAgent);
             return;
@@ -1166,9 +1159,9 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         }
         
         // === ACCESS ALLOWED ===
-        $allowedReason = $scannerException ? 'signed-owner-scanner' : ($verifiedKnownBotException
+        $allowedReason = $verifiedKnownBotException
             ? 'verified-known-bot'
-            : ($knownBotException ? 'known-bot' : ($compatibilityException ? 'compatibility-exception' : '')));
+            : ($knownBotException ? 'known-bot' : ($compatibilityException ? 'compatibility-exception' : ''));
         $this->currentDecisionTrace[] = 'final: allow';
         $this->recordTrafficHistory($ip, $country, $asn, true, $allowedReason, $userAgent);
         if ($this->enable_stats_logging) {

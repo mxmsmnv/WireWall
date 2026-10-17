@@ -4,12 +4,6 @@ All notable changes to WireWall are documented here.
 
 ---
 
-## 1.13.0 — October 17, 2026
-
-- Add opt-in Ed25519 owner scanner authorization for exact-host, query-free GET root/Git/env/phpinfo paths only; one-hour grant, 30-second request age, single-use nonces, 10/minute and 60/hour independent budget.
-- Signed requests skip JS/fake-browser and proxy/datacenter heuristics only. Emergency blocks, bans, triggers, existing rate limits, explicit IP/ASN/geo/path/bot rules and web-server denials remain active. Unsigned/invalid/expired requests retain all original defenses.
-- Store only public-key configuration and bounded hashed-nonce state outside the web root. No private key or signatures in traffic records. Numeric version 1130.
-
 ## 1.12.0 — July 30, 2026
 
 ### Incident Operations
