@@ -8,7 +8,7 @@
 
 If this project helps your work, consider supporting future development: [GitHub Sponsors](https://github.com/sponsors/mxmsmnv) or [smnv.org/sponsor](https://smnv.org/sponsor/).
 
-**Version:** 1.12.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
+**Version:** 1.13.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
 
 Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection, rate limiting, VPN/Proxy/Tor detection, JS challenge, and a real-time admin dashboard.
 
@@ -301,3 +301,7 @@ WireWall is one layer of a defence-in-depth strategy. It does not replace:
 MIT License. See [LICENSE](LICENSE) for details.
 
 See [CHANGELOG.md](CHANGELOG.md) for version history.
+
+## Short-lived signed owner scanner
+
+Optional `$config->wireWallOwnerScanner` contains only `host`, Ed25519 `public_key` (base64), integer `issued_at`/`expires_at` (maximum one hour). Default absent: no change. The private key never belongs on the server or in source. [Protocol and activation](docs/OWNER_SCANNER.md).
