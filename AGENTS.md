@@ -33,6 +33,7 @@ Core files:
 - `src/Storage/WireWallTrafficReportService.php` - dashboard traffic report listing, summaries, last-24h exports, and ZIP packaging
 - `src/Support/WireWallIpMatcher.php` - shared exact, wildcard, IPv4 CIDR, and IPv6 CIDR matcher
 - `src/Support/WireWallRuleMatcher.php` - shared rule parsing, wildcard matching, and unsafe browser allowlist extraction
+- `src/Support/WireWallApiPathRegistry.php` - validated module-owned public API bypass registry
 - `assets/dashboard.css` and `assets/dashboard.js` - dashboard assets loaded by `ProcessWireWall.module.php`
 - `README.md` - general purpose and installation
 - `INSTALL.md` - setup and server notes
@@ -56,6 +57,8 @@ When building a ProcessWire site:
 3. For public pages, build templates normally; WireWall checks happen before rendering.
 4. For custom frontend AJAX endpoints, add their paths to `custom_trusted_paths` if they are POST AJAX endpoints.
 5. For public APIs, webhooks, GraphQL, REST, AppApi, or custom API routes, add their paths to `custom_api_paths` only if those routes have their own authentication or safety checks.
+   An installed module that owns authenticated routes may instead use
+   `syncTrustedApiPaths()` so it can manage only its namespaced registration.
 6. For logged-in user workflows, remember that logged-in ProcessWire users bypass WireWall checks.
 7. For analytics or AI traffic analysis, use the dashboard downloads or read JSONL files from the configured private WireWall data path, not the ProcessWire `wirewall` log.
 8. For high-traffic sites, prefer local MaxMind GeoLite2 databases over HTTP fallbacks.
@@ -92,6 +95,17 @@ $wirewall = $modules->get('WireWall');
 ```
 
 Prefer ProcessWire module configuration APIs over direct file edits for site-specific settings.
+
+Module-owned authenticated route integration:
+
+```php
+$wirewall->syncTrustedApiPaths('ExampleModule', ['/example-api/'], true);
+$registration = $wirewall->getTrustedApiPathIntegration('ExampleModule');
+```
+
+The owner must remove the same registration when its integration is disabled.
+The registered route remains responsible for authentication, authorization,
+rate limits, CSRF policy where applicable, and safe error responses.
 
 ## Public And Agent-Usable Configuration Keys
 

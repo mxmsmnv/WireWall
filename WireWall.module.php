@@ -1,9 +1,10 @@
 <?php namespace ProcessWire;
 
 require_once __DIR__ . '/src/Storage/WireWallOperationsStore.php';
+require_once __DIR__ . '/src/Support/WireWallApiPathRegistry.php';
 
 /**
- * WireWall 1.12.0 - Advanced Traffic Firewall
+ * WireWall 1.13.0 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -15,7 +16,7 @@ require_once __DIR__ . '/src/Storage/WireWallOperationsStore.php';
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.12.0
+ * @version 1.13.0
  * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @date April 24, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
@@ -27,7 +28,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 1120,
+            'version' => 1130,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -68,6 +69,54 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     protected $ipIntelligenceService = null;
     protected $currentIpIntel = null;
     protected $currentDecisionTrace = [];
+    protected $apiPathRegistry = null;
+    protected $activeSettings = [];
+
+    protected function getApiPathRegistry(): WireWallApiPathRegistry {
+        if ($this->apiPathRegistry instanceof WireWallApiPathRegistry) return $this->apiPathRegistry;
+        return $this->apiPathRegistry = new WireWallApiPathRegistry();
+    }
+
+    /**
+     * Register or remove API path prefixes owned by another installed module.
+     * Integrated routes must retain their own application-level security.
+     */
+    public function syncTrustedApiPaths(string $owner, array $paths, bool $enabled): array {
+        $previous = $this->getWireWallSettings();
+        $next = $this->getApiPathRegistry()->withIntegration($previous, $owner, $paths, $enabled);
+        if ($next === $previous) return $this->getTrustedApiPathIntegration($owner);
+
+        $user = $this->wire('user');
+        $this->getOperationsStore()->saveSnapshot($previous, $next, [
+            'user' => $user && $user->id ? (string)$user->name : 'system',
+            'module_version' => '1.13.0',
+        ]);
+        if (!$this->saveWireWallSettings($next)) {
+            throw new WireException('WireWall could not persist the trusted API integration.');
+        }
+
+        try {
+            $this->wire('modules')->saveModuleConfigData($this, $next);
+        } catch (\Throwable $error) {
+            $this->saveWireWallSettings($previous);
+            $this->wire('modules')->saveModuleConfigData($this, $previous);
+            throw new WireException('WireWall could not synchronize its ProcessWire configuration fallback.', 0, $error);
+        }
+
+        $this->setArray($next);
+        $this->activeSettings = $next;
+        $this->getOperationsStore()->audit('trusted_api_integration_changed', [
+            'owner' => $owner,
+            'enabled' => $enabled,
+            'paths' => $this->getApiPathRegistry()->integration($next, $owner)['paths'],
+        ]);
+        return $this->getTrustedApiPathIntegration($owner);
+    }
+
+    public function getTrustedApiPathIntegration(string $owner): array {
+        $settings = $this->activeSettings ?: $this->getWireWallSettings();
+        return $this->getApiPathRegistry()->integration($settings, $owner);
+    }
 
     /**
      * Get WireWall data directory path (persistent across updates)
@@ -322,7 +371,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
 
         return [
             'schema' => 'wirewall_settings_export_v1',
-            'module_version' => '1.12.0',
+            'module_version' => '1.13.0',
             'module_version_number' => self::getModuleInfo()['version'],
             'exported_at' => date('c'),
             'settings' => $settings,
@@ -384,7 +433,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $user = $this->wire('user');
         $this->getOperationsStore()->saveSnapshot($current, $settings, [
             'user' => $user && $user->id ? (string) $user->name : 'system',
-            'module_version' => '1.12.0',
+            'module_version' => '1.13.0',
         ]);
         $this->saveWireWallSettings($settings);
         $this->wire('modules')->saveModuleConfigData($this, $settings);
@@ -431,7 +480,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $user = $this->wire('user');
         $this->getOperationsStore()->saveSnapshot($previous, $next, [
             'user' => $user && $user->id ? (string) $user->name : 'system',
-            'module_version' => '1.12.0',
+            'module_version' => '1.13.0',
         ]);
         $this->saveWireWallSettings($next);
         $this->wire('modules')->saveModuleConfigData($this, $next);
@@ -466,7 +515,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             $user = $this->wire('user');
             $this->getOperationsStore()->saveSnapshot($current, $next, [
                 'user' => $user && $user->id ? (string) $user->name : 'system',
-                'module_version' => '1.12.0',
+                'module_version' => '1.13.0',
             ]);
             $this->saveWireWallSettings($next);
             $this->wire('modules')->saveModuleConfigData($this, $next);
@@ -723,6 +772,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             $data = $migratedData;
         }
         $this->setArray($data);
+        $this->activeSettings = $data;
         
         // Normalize checkbox values: convert empty strings to 0, keep 1 as is
         // This supports old configs with "" and new configs with 0/1
@@ -863,10 +913,15 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $data['version'] = $moduleInfo['version'];
 
         $previous = $this->getWireWallSettings();
+        // This registry is managed by owning modules, not by editable form
+        // inputs. Preserve it when an administrator saves ordinary settings.
+        if (!array_key_exists('api_path_integrations', $data)) {
+            $data['api_path_integrations'] = $previous['api_path_integrations'] ?? [];
+        }
         $user = $this->wire('user');
         $this->getOperationsStore()->saveSnapshot($previous, $data, [
             'user' => $user && $user->id ? (string) $user->name : 'system',
-            'module_version' => '1.12.0',
+            'module_version' => '1.13.0',
         ]);
 
         // The dedicated table is canonical; ProcessWire's config row remains a
@@ -972,6 +1027,14 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         
         // Skip for CLI
         if ($config->cli) return;
+
+        // Explicit module-owned API integrations bypass the generic traffic
+        // firewall independently from the AJAX compatibility toggle. Their
+        // owning routes must enforce authentication and abuse controls.
+        $settings = $this->activeSettings ?: $this->getWireWallSettings();
+        if ($this->getApiPathRegistry()->matches($settings, $requestUri)) {
+            return;
+        }
         
         // === PRIORITY 0.5: ALLOW TRUSTED PROCESSWIRE MODULE AJAX REQUESTS ===
         // Check before any other security checks (unless AJAX protection is disabled)
@@ -2177,40 +2240,12 @@ class WireWall extends WireData implements Module, ConfigurableModule {
     }
 
     /**
-     * Check if request is from a trusted ProcessWire module or API endpoint
-     * Returns true if this is an allowed module request that should bypass WireWall
-     * 
-     * Supports:
-     * - Core ProcessWire modules (POST AJAX)
-     * - RockFrontend AJAX endpoints (/ajax/)
-     * - API endpoints (/api/, /api2/, etc.) - ALL HTTP methods
-     * - Custom trusted paths (configurable)
+     * Check if a POST AJAX request comes from a trusted ProcessWire module.
+     * API paths are handled separately before generic AJAX policy.
      */
     protected function isAllowedModuleRequest() {
         $input = $this->wire('input');
         $requestUri = $_SERVER['REQUEST_URI'] ?? '';
-        
-        // === API ENDPOINTS CHECK (all HTTP methods) ===
-        // API endpoints don't require POST or AJAX headers
-        $apiPaths = [
-            '/api/',    // AppApi and custom APIs
-            '/api2/',   // AppApi v2
-            '/rest/',   // REST API
-        ];
-        
-        // Add custom API paths from module config
-        $customApiPaths = $this->get('custom_api_paths');
-        if (!empty($customApiPaths)) {
-            $customApiPathsList = array_filter(array_map('trim', explode("\n", $customApiPaths)));
-            $apiPaths = array_merge($apiPaths, $customApiPathsList);
-        }
-        
-        // Check if request is to an API endpoint
-        foreach ($apiPaths as $apiPath) {
-            if (stripos($requestUri, $apiPath) !== false) {
-                return true; // Allow all HTTP methods to API endpoints
-            }
-        }
         
         // === AJAX REQUESTS CHECK (POST only) ===
         // Only check POST AJAX requests for modules
@@ -4063,6 +4098,23 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f->rows = 4;
         $f->value = isset($data['custom_api_paths']) ? $data['custom_api_paths'] : '';
         $f->collapsed = Inputfield::collapsedBlank;
+        $fieldset->add($f);
+
+        $integrations = (new WireWallApiPathRegistry())->integrations($data);
+        $f = $modules->get('InputfieldMarkup');
+        $f->name = 'registered_api_path_integrations';
+        $f->label = 'Registered Module API Integrations';
+        $f->description = 'Installed modules may register only their own authenticated API prefixes. Manage each integration from the owning module.';
+        if ($integrations) {
+            $items = [];
+            foreach ($integrations as $owner => $paths) {
+                $items[] = '<li><strong>' . wire('sanitizer')->entities($owner) . '</strong>: <code>'
+                    . wire('sanitizer')->entities(implode('</code>, <code>', $paths)) . '</code></li>';
+            }
+            $f->value = '<ul>' . implode('', $items) . '</ul>';
+        } else {
+            $f->value = '<p>No module-owned API integrations are registered.</p>';
+        }
         $fieldset->add($f);
 
         $f = $modules->get('InputfieldCheckbox');

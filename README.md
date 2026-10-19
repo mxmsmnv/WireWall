@@ -8,7 +8,7 @@
 
 If this project helps your work, consider supporting future development: [GitHub Sponsors](https://github.com/sponsors/mxmsmnv) or [smnv.org/sponsor](https://smnv.org/sponsor/).
 
-**Version:** 1.12.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
+**Version:** 1.13.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
 
 Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection, rate limiting, VPN/Proxy/Tor detection, JS challenge, and a real-time admin dashboard.
 
@@ -72,6 +72,7 @@ Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection,
 - **File-based cache** — scales to 1M+ IPs, no database overhead
 - **Cache management UI** — per-type stats, clear buttons
 - **Dedicated settings storage** — canonical `wirewall_settings` table with automatic migration and ProcessWire config fallback
+- **Module-owned API integrations** — installed modules can opt authenticated public routes into a namespaced WireWall exception without overwriting administrator-managed paths
 - **Detailed logging** — country, city, region, ASN, UA in every log entry
 - **Retention and alerts** — gzip rotation, retention/disk caps, rate-limited email/webhook notifications, and hookable alert payloads
 

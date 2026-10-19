@@ -4,6 +4,23 @@ All notable changes to WireWall are documented here.
 
 ---
 
+## 1.13.0 — October 19, 2026
+
+### Module integrations
+
+- Added a validated module-owned API path registry for authenticated public endpoints that need to bypass global traffic policy.
+- Added public registration and inspection APIs so an integration can enable or remove only its own routes without overwriting administrator-managed exceptions.
+- Added configuration visibility for registered integrations and separated API-prefix matching from the generic AJAX compatibility toggle.
+
+### Security
+
+- Match trusted API exceptions against the parsed request path and anchored prefixes instead of searching the complete request URI.
+- Reject root, malformed, control-character, query-string, fragment, and unbounded integration paths.
+
+### Tests
+
+- Added registry coverage for validation, prefix matching, deduplication, manual path preservation, and owner-isolated removal.
+
 ## 1.12.0 — July 30, 2026
 
 ### Incident Operations
