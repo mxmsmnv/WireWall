@@ -8,7 +8,36 @@
 
 If this project helps your work, consider supporting future development: [GitHub Sponsors](https://github.com/sponsors/mxmsmnv) or [smnv.org/sponsor](https://smnv.org/sponsor/).
 
-**Version:** 1.13.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
+**Version:** 1.14.0 | **Requires:** ProcessWire 3.0.200+, PHP 8.1+
+
+### Apple Private Relay
+
+`Allow verified Apple Private Relay` is disabled by default. When explicitly enabled,
+only an address in Apple's official [egress-IP feed](https://mask-api.icloud.com/egress-ip-ranges.csv)
+is exempt from automatic proxy/VPN and datacenter classification. A browser name,
+ASN label, forwarded header or login URL does not grant this exception. Explicit
+IP/ASN blocks, emergency rules, temporary bans, rate limits, geographic restrictions,
+request challenges, global rules and application authentication still apply.
+
+The feed is fetched over verified HTTPS from one fixed URL, with no redirects,
+a 24 MB response limit and a ten-second total timeout. No visitor IP is sent to
+Apple. The validated index is stored outside the document root under the existing
+private WireWall directory, refreshed at most once daily, and searched locally.
+A failed refresh is retried no more than once per hour; a verified index may remain
+usable for seven days, after which the normal proxy policy applies. Concurrent
+requests do not wait for a refresh lock. PHP cURL and a writable private directory
+are required. Before enabling this on a production site, prewarm and verify the
+index from an authorized ProcessWire CLI bootstrap:
+
+```php
+$result = $modules->get('WireWall')->refreshAppleRelayRanges();
+// Require available=true, a recent fetched_at and a nonzero range_count.
+```
+
+The first request after a daily refresh becomes due can spend up to ten seconds
+fetching the feed; the protected last-good index remains available to concurrent
+requests. Refresh failure never creates an allow-all fallback. The feature follows
+[Apple's documented IP-range identification](https://developer.apple.com/icloud/prepare-your-network-for-icloud-private-relay/).
 
 Enterprise-grade firewall for ProcessWire CMS with geo-blocking, bot protection, rate limiting, VPN/Proxy/Tor detection, JS challenge, and a real-time admin dashboard.
 

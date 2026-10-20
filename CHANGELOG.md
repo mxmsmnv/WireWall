@@ -4,6 +4,14 @@ All notable changes to WireWall are documented here.
 
 ---
 
+## 1.14.0 — October 20, 2026
+
+- Added a default-off option to allow Apple Private Relay verified against Apple's official HTTPS IPv4/IPv6 egress feed while keeping other proxy/VPN and automatic datacenter blocks in place.
+- Preserved explicit IP/ASN blocks, emergency rules, bans, rate limits, geography, challenges, global rules and application authentication for verified relay traffic. No path, browser or ASN allowlist is introduced.
+- Added bounded HTTPS download, strict CSV validation, compact private range index, atomic replacement, concurrent-refresh lock, daily refresh and hourly failure backoff. Last-good ranges expire after seven days; missing/expired/invalid data fails closed.
+- Added operator prewarm API and deterministic feed/cache/access-order tests, including spoofed user agents and IPv4/IPv6 boundaries. Existing sites retain their previous behavior until the option is explicitly enabled.
+
+
 ## 1.13.0 — October 19, 2026
 
 ### Module integrations

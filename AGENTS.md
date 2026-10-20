@@ -28,6 +28,7 @@ Core files:
 - `ProcessWireWall.module.php` - admin dashboard Process module
 - `src/Dashboard/WireWallDashboardStats.php` - dashboard log tailing, parsing, aggregation, and TTL formatting
 - `src/WireWallMonitorProviderVerifier.php` - official IP-feed verifier for synthetic monitoring providers
+- `src/Intelligence/WireWallAppleRelayVerifier.php` - bounded official Apple Private Relay range verification and private cache; default-off exception only for proxy/datacenter classification, never a general firewall bypass
 - `src/Storage/WireWallCacheInspector.php` - dashboard cache, active-ban, and traffic-history inventory
 - `src/Storage/WireWallTrafficHistoryStore.php` - private traffic-history path, migration, protection, and JSONL writing
 - `src/Storage/WireWallTrafficReportService.php` - dashboard traffic report listing, summaries, last-24h exports, and ZIP packaging

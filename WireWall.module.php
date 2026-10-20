@@ -4,7 +4,7 @@ require_once __DIR__ . '/src/Storage/WireWallOperationsStore.php';
 require_once __DIR__ . '/src/Support/WireWallApiPathRegistry.php';
 
 /**
- * WireWall 1.13.0 - Advanced Traffic Firewall
+ * WireWall 1.14.0 - Advanced Traffic Firewall
  * 
  * Maximum security firewall with:
  * - MaxMind GeoLite2 support with HTTP fallback
@@ -16,7 +16,7 @@ require_once __DIR__ . '/src/Support/WireWallApiPathRegistry.php';
  * - Enhanced fake browser detection
  * - IPv4/IPv6 support with CIDR
  *
- * @version 1.13.0
+ * @version 1.14.0
  * @author Maxim Semenov <maxim@smnv.org> (smnv.org)
  * @date April 24, 2026
  * @requires ProcessWire 3.0.200+, PHP 8.1+
@@ -28,7 +28,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         return [
             'title' => 'WireWall',
             'summary' => 'Advanced traffic firewall with VPN/Proxy/Tor detection, rate limiting, and JS challenge',
-            'version' => 1130,
+            'version' => 1140,
             'autoload' => true,
             'singular' => true,
             'icon' => 'shield',
@@ -89,7 +89,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $user = $this->wire('user');
         $this->getOperationsStore()->saveSnapshot($previous, $next, [
             'user' => $user && $user->id ? (string)$user->name : 'system',
-            'module_version' => '1.13.0',
+            'module_version' => '1.14.0',
         ]);
         if (!$this->saveWireWallSettings($next)) {
             throw new WireException('WireWall could not persist the trusted API integration.');
@@ -161,6 +161,20 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $path = trim((string) ($this->ip2proxy_database_path ?? ''));
         if ($path === '') $path = $this->getGeoIPPath() . 'IP2PROXY-LITE.BIN';
         return $this->ipIntelligenceService = new WireWallIpIntelligenceService($path, $this->getComposerAutoloadPath());
+    }
+
+    protected function getAppleRelayVerifier(): WireWallAppleRelayVerifier {
+        require_once __DIR__ . '/src/Intelligence/WireWallAppleRelayVerifier.php';
+        return new WireWallAppleRelayVerifier($this->getPrivateDataPath() . '/apple-relay');
+    }
+
+    /** Optional operator prewarm; no visitor address is sent to Apple. */
+    public function refreshAppleRelayRanges(): array {
+        return $this->getAppleRelayVerifier()->refresh(true);
+    }
+
+    protected function isVerifiedAppleRelay(string $ip): bool {
+        return !empty($this->allow_verified_apple_private_relay) && $this->getAppleRelayVerifier()->verify($ip);
     }
 
     /**
@@ -371,7 +385,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
 
         return [
             'schema' => 'wirewall_settings_export_v1',
-            'module_version' => '1.13.0',
+            'module_version' => '1.14.0',
             'module_version_number' => self::getModuleInfo()['version'],
             'exported_at' => date('c'),
             'settings' => $settings,
@@ -433,7 +447,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $user = $this->wire('user');
         $this->getOperationsStore()->saveSnapshot($current, $settings, [
             'user' => $user && $user->id ? (string) $user->name : 'system',
-            'module_version' => '1.13.0',
+            'module_version' => '1.14.0',
         ]);
         $this->saveWireWallSettings($settings);
         $this->wire('modules')->saveModuleConfigData($this, $settings);
@@ -480,7 +494,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $user = $this->wire('user');
         $this->getOperationsStore()->saveSnapshot($previous, $next, [
             'user' => $user && $user->id ? (string) $user->name : 'system',
-            'module_version' => '1.13.0',
+            'module_version' => '1.14.0',
         ]);
         $this->saveWireWallSettings($next);
         $this->wire('modules')->saveModuleConfigData($this, $next);
@@ -515,7 +529,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             $user = $this->wire('user');
             $this->getOperationsStore()->saveSnapshot($current, $next, [
                 'user' => $user && $user->id ? (string) $user->name : 'system',
-                'module_version' => '1.13.0',
+                'module_version' => '1.14.0',
             ]);
             $this->saveWireWallSettings($next);
             $this->wire('modules')->saveModuleConfigData($this, $next);
@@ -564,10 +578,15 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             if ($this->matchTriggerPattern($uri, $pattern)) return $decide('blocked', 'trigger-url-preset', array_merge($trace, ['trigger: ' . $pattern]));
         }
         $trace[] = 'trigger-rules: pass';
-        $intel = $this->getIpIntelligenceService()->lookup($ip, $asn);
-        $action = $this->getIpIntelligenceService()->actionFor($intel, $this->getWireWallSettings(), $path);
-        if ($action !== 'allow') return $decide($action === 'block' ? 'blocked' : 'challenged', 'proxy-class-' . ($intel['proxy_class'] ?? 'unknown'), array_merge($trace, ['ip-intel: ' . $action]));
-        $trace[] = 'ip-intel: allow';
+        $verifiedAppleRelay = $this->isVerifiedAppleRelay($ip);
+        if ($verifiedAppleRelay) {
+            $trace[] = 'ip-intel: verified Apple Private Relay / allow classification';
+        } else {
+            $intel = $this->getIpIntelligenceService()->lookup($ip, $asn);
+            $action = $this->getIpIntelligenceService()->actionFor($intel, $this->getWireWallSettings(), $path);
+            if ($action !== 'allow') return $decide($action === 'block' ? 'blocked' : 'challenged', 'proxy-class-' . ($intel['proxy_class'] ?? 'unknown'), array_merge($trace, ['ip-intel: ' . $action]));
+            $trace[] = 'ip-intel: allow';
+        }
         if ($this->isBlockedASN($asn)) return $decide('blocked', 'asn-blocked', array_merge($trace, ['asn-blocked: match']));
         $trace[] = 'asn-blocked: no';
         $headerMap = [
@@ -782,7 +801,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             'block_datacenters', 'js_challenge_enabled', 'rate_limit_enabled',
             'block_bad_bots', 'block_search_bots', 'block_ai_bots', 
             'block_other_bots', 'enable_stats_logging', 'enable_traffic_history',
-            'disable_ajax_protection', 'proxy_risk_policy_enabled',
+            'disable_ajax_protection', 'proxy_risk_policy_enabled', 'allow_verified_apple_private_relay',
             'decision_trace_enabled', 'traffic_compress_enabled',
             'alerts_enabled'
         ];
@@ -896,7 +915,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
             'block_datacenters', 'js_challenge_enabled', 'rate_limit_enabled',
             'block_bad_bots', 'block_search_bots', 'block_ai_bots', 
             'block_other_bots', 'enable_stats_logging', 'enable_traffic_history',
-            'disable_ajax_protection', 'proxy_risk_policy_enabled',
+            'disable_ajax_protection', 'proxy_risk_policy_enabled', 'allow_verified_apple_private_relay',
             'decision_trace_enabled', 'traffic_compress_enabled',
             'alerts_enabled'
         ];
@@ -921,7 +940,7 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $user = $this->wire('user');
         $this->getOperationsStore()->saveSnapshot($previous, $data, [
             'user' => $user && $user->id ? (string) $user->name : 'system',
-            'module_version' => '1.13.0',
+            'module_version' => '1.14.0',
         ]);
 
         // The dedicated table is canonical; ProcessWire's config row remains a
@@ -1137,7 +1156,11 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $this->currentDecisionTrace[] = 'js-challenge: pass';
 
         // === PRIORITY 6: LOCAL-FIRST PROXY/PRIVACY RISK POLICY ===
-        if (!$verifiedKnownBotException && (($this->proxy_risk_policy_enabled ?? false) || $this->block_proxy_vpn_tor)) {
+        // This exception affects automatic proxy/datacenter classification only.
+        // Earlier bans, rate limits, geo rules and challenges still run; explicit ASN
+        // blocks and global rules below still run. Never trust a UA or ASN label here.
+        $verifiedAppleRelay = $this->isVerifiedAppleRelay((string) $ip);
+        if (!$verifiedKnownBotException && !$verifiedAppleRelay && (($this->proxy_risk_policy_enabled ?? false) || $this->block_proxy_vpn_tor)) {
             $this->currentIpIntel = $this->getIpIntelligenceService()->lookup($ip, $asn);
             $proxyClass = (string) ($this->currentIpIntel['proxy_class'] ?? '');
             $useExternal = ($this->block_proxy_vpn_tor && $proxyClass === '')
@@ -1164,9 +1187,13 @@ class WireWall extends WireData implements Module, ConfigurableModule {
                 return;
             }
         }
+        if ($verifiedAppleRelay) {
+            $this->currentIpIntel = ['proxy_class' => 'privacy_relay', 'privacy_provider' => 'apple', 'source' => 'apple_official_feed'];
+            $this->currentDecisionTrace[] = 'ip-intel: verified Apple Private Relay / allow classification';
+        }
         
         // === PRIORITY 7: DATACENTER DETECTION ===
-        if (!$verifiedKnownBotException && $this->block_datacenters && $this->isDatacenter($ip, $asn)) {
+        if (!$verifiedKnownBotException && !$verifiedAppleRelay && $this->block_datacenters && $this->isDatacenter($ip, $asn)) {
             $this->currentDecisionTrace[] = 'datacenter: block';
             $this->blockAccess('datacenter', $ip, $country, $asn, $userAgent);
             return;
@@ -3632,6 +3659,13 @@ class WireWall extends WireData implements Module, ConfigurableModule {
         $f->label = 'Block VPN / Proxy / Tor';
         $f->description = 'Legacy all-in-one switch. Prefer the local-first per-class policy below for lower false-positive risk.';
         $f->checked = isset($data['block_proxy_vpn_tor']) && $data['block_proxy_vpn_tor'] ? 'checked' : '';
+        $fieldset->add($f);
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->name = 'allow_verified_apple_private_relay';
+        $f->label = 'Allow verified Apple Private Relay';
+        $f->description = 'Opt-in exception to automatic proxy/datacenter detection, verified only against Apple’s official HTTPS egress-IP feed. Other firewall rules still apply. Refreshes daily with a bounded timeout; a failed refresh retains verified ranges for at most seven days, then the usual blocking policy applies. Requires PHP cURL and a writable private data directory.';
+        $f->checked = !empty($data['allow_verified_apple_private_relay']) ? 'checked' : '';
         $fieldset->add($f);
 
         $f = $modules->get('InputfieldCheckbox');
